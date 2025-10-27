@@ -1,2 +1,19 @@
-
+# Python
+__pycache__/
+*.pyc
+.env
+env/
 .venv/
+
+# Datos y artefactos pesados
+data/
+checkpoints/
+logs/
+
+# Tiny-ImageNet local (si prefieres granular)
+.tiny-imagenet-200/
+tiny-imagenet-200/
+
+# OS/IDE
+.DS_Store
+.vscode/
