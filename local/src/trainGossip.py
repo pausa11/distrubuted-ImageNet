@@ -1,4 +1,9 @@
 import argparse, os, re
+import multiprocessing as mp
+
+if __name__ == "__main__":
+    mp.set_start_method('fork', force=True)
+
 import torch, torch.nn as nn
 from torch.utils.data import DataLoader
 import hivemind
@@ -15,9 +20,7 @@ def parse_args():
     ap.add_argument("--lr", type=float, default=0.1)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--target_global_bsz", type=int, default=512)
-    # haz initial_peer opcional; si no lo pasas, el peer 1 imprimirá su dirección para compartir
     ap.add_argument("--initial_peer", type=str, default=None, help="multiaddr completa con /p2p/<peerID>")
-    # host_maddr también opcional; si no lo pasas, usará puerto efímero
     ap.add_argument("--host_maddr", type=str, default=None, help="p.ej. /ip4/127.0.0.1/tcp/4011 (opcional)")
     ap.add_argument("--run_id", type=str, default="tiny-imagenet-gossip")
     ap.add_argument("--controller", type=str, default=None)
@@ -60,7 +63,7 @@ def main():
         optimizer=base_opt,
         batch_size_per_step=args.batch,
         target_batch_size=args.target_global_bsz,
-        use_local_updates=True,      # local steps + averaging en background (como el tutorial)
+        use_local_updates=True,
         matchmaking_time=3.0,
         averaging_timeout=10.0,
         verbose=True
@@ -70,7 +73,7 @@ def main():
     if device == "cuda":
         model.cuda()
 
-    # Descarga estado más reciente para no “gastar” el primer step
+    # Descarga estado más reciente para no "gastar" el primer step
     try:
         opt.load_state_from_peers()
     except Exception as e:
@@ -105,7 +108,7 @@ def main():
                     reporter.send(global_step, float(loss.item()), lr, int(samples_seen), acc_val_top1=float(acc))
                 print(f"[{peer_id}] step={global_step} val@top1={acc:.3f}")
 
-    # Checkpoint (si tienes host_maddr, usa su puerto; si no, usa “ephemeral”)
+    # Checkpoint
     os.makedirs("checkpoints", exist_ok=True)
     port_str = "ephemeral"
     if args.host_maddr:
