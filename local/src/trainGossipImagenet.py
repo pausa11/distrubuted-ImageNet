@@ -95,10 +95,8 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
     val_loader   = DataLoader(val_ds,   batch_size=128, num_workers=4, pin_memory=True)
     print(f"Train: {len(train_ds)} imágenes, Val: {len(val_ds)} imágenes")
-    print(f"Número de clases: {len(train_ds.classes)}")
 
     # Modelo ResNet50
-    print(f"Inicializando ResNet50 (pretrained={args.pretrained})...")
     model = get_resnet50(num_classes=200, pretrained=args.pretrained)
     criterion = nn.CrossEntropyLoss()
     base_opt = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
