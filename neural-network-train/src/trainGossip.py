@@ -25,6 +25,11 @@ def parse_args():
     ap.add_argument("--run_id", type=str, default="tiny-imagenet-gossip")
     ap.add_argument("--controller", type=str, default=None)
     ap.add_argument("--val_interval", type=int, default=500)
+    
+    # Gossip algorithm parameters
+    ap.add_argument("--gossip_group_size", type=int, default=16, help="Tamaño del grupo de gossip (potencia de 2 recomendada)")
+    ap.add_argument("--gossip_min_group_size", type=int, default=2, help="Tamaño mínimo del grupo para comenzar averaging")
+    ap.add_argument("--gossip_alpha", type=float, default=1.0, help="Tasa de aprendizaje para averaging (1.0 = promedio completo)")
     return ap.parse_args()
 
 def main():
@@ -56,16 +61,31 @@ def main():
     if not args.initial_peer:
         print("Comparte una de estas como --initial_peer en otros peers ↑")
 
-    # Optimizer descentralizado (crear ANTES de mover a GPU)
+    # Configuración del algoritmo Gossip para averaging descentralizado
+    # El algoritmo Gossip permite que los peers se conecten y promedien sus parámetros
+    # en grupos pequeños de forma descentralizada, sin necesidad de un coordinador central.
+    # Esto mejora la escalabilidad y la tolerancia a fallos.
+    
+    gossip_averager_opts = {
+        "target_group_size": args.gossip_group_size,  # Tamaño del grupo de gossip
+        "min_group_size": args.gossip_min_group_size,  # Mínimo de peers para comenzar
+        "averaging_alpha": args.gossip_alpha,  # Factor de averaging (1.0 = promedio completo)
+        "min_matchmaking_time": 5.0,  # Tiempo mínimo para encontrar peers
+    }
+    
+    # Optimizer descentralizado con algoritmo Gossip (crear ANTES de mover a GPU)
+    # use_local_updates=True habilita el modo de "local SGD" donde cada peer entrena
+    # localmente y periódicamente promedia sus parámetros con otros peers usando Gossip
     opt = hivemind.Optimizer(
         dht=dht,
         run_id=args.run_id,
         optimizer=base_opt,
         batch_size_per_step=args.batch,
         target_batch_size=args.target_global_bsz,
-        use_local_updates=True,
+        use_local_updates=True,  # Habilita modo Local SGD con Gossip averaging
         matchmaking_time=3.0,
         averaging_timeout=10.0,
+        averager_opts=gossip_averager_opts,  # Configuración explícita del Gossip
         verbose=True
     )
 
