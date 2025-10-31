@@ -2,6 +2,10 @@
 
 Sistema de entrenamiento distribuido descentralizado usando Hivemind para ImageNet y otros datasets.
 
+> 🚀 **[Ver Guía de Inicio Rápido](QUICKSTART.md)** para comenzar inmediatamente
+> 
+> 📖 **[Ver Guía Completa de Hosting de Datasets](DATASET_HOSTING.md)** para opciones avanzadas de alojamiento
+
 ## 📋 Tabla de Contenidos
 
 - [Características](#características)
