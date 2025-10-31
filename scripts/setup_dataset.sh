@@ -140,11 +140,6 @@ case $DATASET in
             exit 1
         fi
         
-        read -p "¿Continuar con la descarga? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
         # Magnet link conocido para ILSVRC2012 en Academic Torrents
         # Fuente: https://academictorrents.com/details/564a77c1e1119da199ff568478ccb6b6c8d36c0c
         # Nota: Verifica que este hash sea el correcto visitando Academic Torrents

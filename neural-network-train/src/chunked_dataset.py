@@ -268,18 +268,18 @@ class StreamingChunkedDataset(Dataset):
         1. Construir un índice completo como en ChunkedImageNetDataset
         2. O usar ChunkedImageNetDataset después de descargar todos los chunks
         
+        Args:
+            idx: Índice del elemento a obtener
+        
         Raises:
             NotImplementedError: Esta clase es una plantilla. Ver ChunkedImageNetDataset
                                 para una implementación completa.
         """
-        chunk_idx = idx // self.images_per_chunk
-        local_idx = idx % self.images_per_chunk
-        
-        # Descargar chunk si es necesario
-        chunk_path = self._download_chunk(chunk_idx)
-        
-        # Para implementación completa, ver ChunkedImageNetDataset
-        # que incluye indexación apropiada y manejo de imágenes
+        # Esta clase es una plantilla y debe implementarse completamente antes de usar
+        # Ver ChunkedImageNetDataset para una implementación completa que incluye:
+        # - Construcción de índice de imágenes (_build_index)
+        # - Gestión de cache de chunks
+        # - Carga correcta de imágenes y labels
         raise NotImplementedError(
             "StreamingChunkedDataset es una plantilla. "
             "Use ChunkedImageNetDataset con chunks ya descargados, "
