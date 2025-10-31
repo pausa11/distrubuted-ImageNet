@@ -101,22 +101,18 @@ def main():
     criterion = nn.CrossEntropyLoss()
     base_opt = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     
-    # Learning rate scheduler con cosine annealing
-    total_steps = len(train_ds) // args.batch * args.epochs
-    warmup_steps = len(train_ds) // args.batch * args.warmup_epochs
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_opt, T_max=total_steps - warmup_steps, eta_min=0.001)
+    # Nota: scheduler se crea después de train_loader para calcular steps correctos
 
     # Cargar checkpoint si se especifica
     start_step = 0
     best_acc = 0.0
+    scheduler = None
     if args.resume_from:
         if os.path.exists(args.resume_from):
             print(f"📂 Cargando checkpoint desde: {args.resume_from}")
             checkpoint = torch.load(args.resume_from, map_location='cpu')
             model.load_state_dict(checkpoint['model_state_dict'])
             base_opt.load_state_dict(checkpoint['optimizer_state_dict'])
-            if 'scheduler_state_dict' in checkpoint:
-                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             start_step = checkpoint.get('step', 0)
             best_acc = checkpoint.get('best_acc', 0.0)
             print(f"✅ Checkpoint cargado! Step: {start_step}, Best acc: {best_acc:.3f}")
@@ -125,6 +121,37 @@ def main():
             print("   Iniciando desde cero...")
     else:
         print("🆕 Iniciando entrenamiento desde cero")
+    
+    # Learning rate schedulers con warmup y cosine annealing
+    # Calculamos steps basados en train_loader (considera drop_last=True)
+    steps_per_epoch = len(train_loader)
+    total_training_steps = steps_per_epoch * args.epochs
+    warmup_steps = steps_per_epoch * args.warmup_epochs
+    
+    # Usamos SequentialLR para combinar warmup + cosine annealing
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        base_opt, 
+        start_factor=0.01, 
+        end_factor=1.0, 
+        total_iters=warmup_steps
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        base_opt, 
+        T_max=total_training_steps - warmup_steps, 
+        eta_min=0.001
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        base_opt,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_steps]
+    )
+    
+    # Cargar scheduler state si existe
+    if args.resume_from and os.path.exists(args.resume_from):
+        checkpoint = torch.load(args.resume_from, map_location='cpu')
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            print("✅ Scheduler state cargado")
 
     # DHT: deja que el daemon elija puerto si no pasas host_maddr
     dht_kwargs = {"start": True}
@@ -185,12 +212,6 @@ def main():
         for batch_idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
             
-            # Warmup learning rate
-            if global_step < warmup_steps:
-                warmup_lr = args.lr * (global_step + 1) / warmup_steps
-                for param_group in base_opt.param_groups:
-                    param_group['lr'] = warmup_lr
-            
             opt.zero_grad()
             logits = model(x)
             loss = criterion(logits, y)
@@ -201,9 +222,8 @@ def main():
             
             opt.step()
             
-            # Actualizar scheduler solo después de warmup
-            if global_step >= warmup_steps:
-                scheduler.step()
+            # Actualizar scheduler después de cada step
+            scheduler.step()
 
             global_step += 1
             samples_seen += x.size(0)
