@@ -11,6 +11,7 @@ para descargar de una vez o mantener en memoria.
 
 import os
 import tarfile
+import urllib.request
 from torch.utils.data import Dataset
 from PIL import Image
 import io
@@ -237,8 +238,6 @@ class StreamingChunkedDataset(Dataset):
     
     def _download_chunk(self, chunk_idx: int) -> str:
         """Descarga un chunk si no existe localmente"""
-        import urllib.request
-        
         url = self.chunk_urls[chunk_idx]
         filename = os.path.basename(url)
         local_path = os.path.join(self.cache_dir, filename)
@@ -251,21 +250,42 @@ class StreamingChunkedDataset(Dataset):
         return local_path
     
     def __len__(self) -> int:
-        """Estimación del tamaño total"""
+        """
+        Estimación del tamaño total del dataset.
+        
+        Nota: Esto es una estimación basada en images_per_chunk.
+        Para obtener el tamaño exacto, se necesitaría construir un índice
+        completo (ver ChunkedImageNetDataset._build_index).
+        """
         return len(self.chunk_urls) * self.images_per_chunk
     
     def __getitem__(self, idx: int):
-        """Similar a ChunkedImageNetDataset pero descarga chunks bajo demanda"""
+        """
+        Similar a ChunkedImageNetDataset pero descarga chunks bajo demanda.
+        
+        NOTA: Esta es una implementación de ejemplo/plantilla.
+        Para uso en producción, se recomienda:
+        1. Construir un índice completo como en ChunkedImageNetDataset
+        2. O usar ChunkedImageNetDataset después de descargar todos los chunks
+        
+        Raises:
+            NotImplementedError: Esta clase es una plantilla. Ver ChunkedImageNetDataset
+                                para una implementación completa.
+        """
         chunk_idx = idx // self.images_per_chunk
         local_idx = idx % self.images_per_chunk
         
         # Descargar chunk si es necesario
         chunk_path = self._download_chunk(chunk_idx)
         
-        # Leer del chunk (implementación similar a ChunkedImageNetDataset)
-        # ... (simplificado para el ejemplo)
-        
-        raise NotImplementedError("Implementar lógica de carga de imagen")
+        # Para implementación completa, ver ChunkedImageNetDataset
+        # que incluye indexación apropiada y manejo de imágenes
+        raise NotImplementedError(
+            "StreamingChunkedDataset es una plantilla. "
+            "Use ChunkedImageNetDataset con chunks ya descargados, "
+            "o implemente la lógica de carga completa basándose en "
+            "ChunkedImageNetDataset._build_index y __getitem__"
+        )
 
 
 if __name__ == "__main__":

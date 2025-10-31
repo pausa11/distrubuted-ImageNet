@@ -75,9 +75,14 @@ case $DATASET in
         fi
         
         echo_info "Descargando desde Academic Torrents..."
-        echo_warning "Nota: Necesitas el magnet link correcto para Tiny-ImageNet"
-        echo "Visita: https://academictorrents.com/"
-        # aria2c --seed-time=0 "magnet:?xt=urn:btih:HASH" -d "$DATA_DIR/"
+        echo_warning "Método torrent para Tiny-ImageNet no configurado por defecto"
+        echo "Tiny-ImageNet es pequeño (~250MB), se recomienda usar 'local' en su lugar"
+        echo ""
+        echo "Si deseas usar torrents, busca el dataset en:"
+        echo "  https://academictorrents.com/browse.php?search=tiny+imagenet"
+        echo ""
+        echo "Luego usa: aria2c --seed-time=0 'magnet:?xt=urn:btih:HASH' -d $DATA_DIR/"
+        exit 1
         ;;
       
       *)
@@ -135,10 +140,19 @@ case $DATASET in
             exit 1
         fi
         
-        # Magnet link de Academic Torrents para ILSVRC2012
-        MAGNET="magnet:?xt=urn:btih:564a77c1e1119da199ff568478ccb6b6c8d36c0c"
+        read -p "¿Continuar con la descarga? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+        # Magnet link conocido para ILSVRC2012 en Academic Torrents
+        # Fuente: https://academictorrents.com/details/564a77c1e1119da199ff568478ccb6b6c8d36c0c
+        # Nota: Verifica que este hash sea el correcto visitando Academic Torrents
+        MAGNET="magnet:?xt=urn:btih:564a77c1e1119da199ff568478ccb6b6c8d36c0c&dn=ILSVRC2012_img_train.tar"
         
-        echo_info "Iniciando descarga torrent..."
+        echo_warning "IMPORTANTE: Verifica el hash en https://academictorrents.com/"
+        echo_info "Hash actual: 564a77c1e1119da199ff568478ccb6b6c8d36c0c"
+        
         aria2c --seed-time=24 \
                --max-upload-limit=10M \
                --file-allocation=none \
