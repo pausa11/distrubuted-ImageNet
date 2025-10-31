@@ -202,17 +202,24 @@ class ChunkedImageNetDataset(Dataset):
 
 class StreamingChunkedDataset(Dataset):
     """
-    Versión más eficiente que descarga chunks bajo demanda desde una URL.
+    PLANTILLA: Dataset que descarga chunks bajo demanda desde URLs.
     
-    Útil cuando los chunks están alojados en S3, HTTP server, etc.
-    y no quieres descargar todos de una vez.
+    ⚠️ ADVERTENCIA: Esta clase es una plantilla y NO está completamente implementada.
+    El método __getitem__ lanzará NotImplementedError. Use ChunkedImageNetDataset
+    en su lugar, o implemente la funcionalidad completa basándose en ella.
+    
+    Esta plantilla muestra cómo descargar chunks desde URLs (S3, HTTP server, etc.)
+    bajo demanda en lugar de descargar todos de una vez.
     
     Args:
         chunk_urls: Lista de URLs a los chunks
         transform: Transformaciones a aplicar
         cache_dir: Directorio temporal para cachear chunks descargados
+        images_per_chunk: Estimación de imágenes por chunk (para __len__)
     
     Example:
+        >>> # Esta clase es una plantilla - no funcionará sin implementación completa
+        >>> # Para uso real, use ChunkedImageNetDataset con chunks locales
         >>> urls = [
         ...     "https://mi-servidor.com/imagenet_chunk_00.tar.gz",
         ...     "https://mi-servidor.com/imagenet_chunk_01.tar.gz",
