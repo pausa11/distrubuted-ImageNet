@@ -73,15 +73,16 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_root", type=str, default="./data")
     ap.add_argument("--batch", type=int, default=64)
-    ap.add_argument("--lr", type=float, default=0.01)
+    ap.add_argument("--lr", type=float, default=0.1)
     ap.add_argument("--epochs", type=int, default=10)
-    ap.add_argument("--target_global_bsz", type=int, default=256)
+    ap.add_argument("--target_global_bsz", type=int, default=512)
     ap.add_argument("--initial_peer", type=str, default=None, help="multiaddr completa con /p2p/<peerID>")
     ap.add_argument("--host_maddr", type=str, default=None, help="p.ej. /ip4/127.0.0.1/tcp/4011 (opcional)")
     ap.add_argument("--run_id", type=str, default="cifar10-gossip")
     ap.add_argument("--controller", type=str, default=None)
-    ap.add_argument("--val_interval", type=int, default=200)
+    ap.add_argument("--val_interval", type=int, default=100)
     ap.add_argument("--resume_from", type=str, default=None, help="Path al checkpoint para reanudar entrenamiento")
+    ap.add_argument("--warmup_epochs", type=int, default=1, help="Número de epochs para warmup del LR")
     return ap.parse_args()
 
 def main():
@@ -99,6 +100,30 @@ def main():
     model = get_simple_cnn()
     criterion = nn.CrossEntropyLoss()
     base_opt = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    
+    # Learning rate schedulers con warmup y cosine annealing
+    # Calculamos steps basados en train_loader (considera drop_last=True)
+    steps_per_epoch = len(train_loader)
+    total_training_steps = steps_per_epoch * args.epochs
+    warmup_steps = steps_per_epoch * args.warmup_epochs
+    
+    # Usamos SequentialLR para combinar warmup + cosine annealing
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        base_opt, 
+        start_factor=0.01, 
+        end_factor=1.0, 
+        total_iters=warmup_steps
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        base_opt, 
+        T_max=total_training_steps - warmup_steps, 
+        eta_min=0.001
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        base_opt,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_steps]
+    )
 
     # Cargar checkpoint si se especifica
     start_step = 0
@@ -109,6 +134,9 @@ def main():
             checkpoint = torch.load(args.resume_from, map_location='cpu')
             model.load_state_dict(checkpoint['model_state_dict'])
             base_opt.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scheduler_state_dict' in checkpoint:
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                print("✅ Scheduler state cargado")
             start_step = checkpoint.get('step', 0)
             best_acc = checkpoint.get('best_acc', 0.0)
             print(f"✅ Checkpoint cargado! Step: {start_step}, Best acc: {best_acc:.3f}")
@@ -143,9 +171,10 @@ def main():
         batch_size_per_step=args.batch,
         target_batch_size=args.target_global_bsz,
         use_local_updates=True,
-        matchmaking_time=3.0,
-        averaging_timeout=10.0,
-        verbose=True
+        matchmaking_time=5.0,
+        averaging_timeout=15.0,
+        verbose=True,
+        grad_compression=hivemind.compression.Float16Compression(),
     )
 
     # Ahora sí, mueve a GPU si hay
@@ -165,6 +194,7 @@ def main():
 
     # Entrenamiento
     print(f"\n🎯 Iniciando entrenamiento ({args.epochs} epochs, batch={args.batch}, target_bsz={args.target_global_bsz})")
+    print(f"   LR inicial: {args.lr}, LR final: 0.001, Warmup epochs: {args.warmup_epochs}")
     if start_step > 0:
         print(f"   Reanudando desde step {start_step} con best_acc={best_acc:.3f}")
     global_step, samples_seen = start_step, start_step * args.batch
@@ -174,17 +204,26 @@ def main():
         print(f"\n📊 Epoch {epoch+1}/{args.epochs}")
         for batch_idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
+            
             opt.zero_grad()
             logits = model(x)
             loss = criterion(logits, y)
             loss.backward()
+            
+            # Gradient clipping para estabilidad
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            
             opt.step()
+            
+            # Actualizar scheduler después de cada step
+            scheduler.step()
 
             global_step += 1
             samples_seen += x.size(0)
 
             if batch_idx % 20 == 0:
-                print(f"  Step {global_step} | Loss: {loss.item():.4f} | Samples: {samples_seen}")
+                current_lr = base_opt.param_groups[0]['lr']
+                print(f"  Step {global_step} | Loss: {loss.item():.4f} | LR: {current_lr:.6f} | Samples: {samples_seen}")
 
             if reporter and (global_step % 20 == 0):
                 lr = next(g['lr'] for g in base_opt.param_groups)
@@ -210,6 +249,7 @@ def main():
                         'step': global_step,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': base_opt.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict(),
                         'best_acc': best_acc,
                     }, checkpoint_path)
                     print(f"💾 Nuevo mejor modelo guardado! Acc: {best_acc:.3f} → {checkpoint_path}")
@@ -231,6 +271,7 @@ def main():
         'step': global_step,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': base_opt.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
         'final_acc': final_acc,
         'best_acc': best_acc,
     }, checkpoint_path)
