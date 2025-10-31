@@ -101,27 +101,6 @@ def main():
     criterion = nn.CrossEntropyLoss()
     base_opt = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     
-    # Nota: scheduler se crea después de train_loader para calcular steps correctos
-
-    # Cargar checkpoint si se especifica
-    start_step = 0
-    best_acc = 0.0
-    scheduler = None
-    if args.resume_from:
-        if os.path.exists(args.resume_from):
-            print(f"📂 Cargando checkpoint desde: {args.resume_from}")
-            checkpoint = torch.load(args.resume_from, map_location='cpu')
-            model.load_state_dict(checkpoint['model_state_dict'])
-            base_opt.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_step = checkpoint.get('step', 0)
-            best_acc = checkpoint.get('best_acc', 0.0)
-            print(f"✅ Checkpoint cargado! Step: {start_step}, Best acc: {best_acc:.3f}")
-        else:
-            print(f"⚠️  Checkpoint no encontrado: {args.resume_from}")
-            print("   Iniciando desde cero...")
-    else:
-        print("🆕 Iniciando entrenamiento desde cero")
-    
     # Learning rate schedulers con warmup y cosine annealing
     # Calculamos steps basados en train_loader (considera drop_last=True)
     steps_per_epoch = len(train_loader)
@@ -145,13 +124,27 @@ def main():
         schedulers=[warmup_scheduler, cosine_scheduler],
         milestones=[warmup_steps]
     )
-    
-    # Cargar scheduler state si existe
-    if args.resume_from and os.path.exists(args.resume_from):
-        checkpoint = torch.load(args.resume_from, map_location='cpu')
-        if 'scheduler_state_dict' in checkpoint:
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-            print("✅ Scheduler state cargado")
+
+    # Cargar checkpoint si se especifica
+    start_step = 0
+    best_acc = 0.0
+    if args.resume_from:
+        if os.path.exists(args.resume_from):
+            print(f"📂 Cargando checkpoint desde: {args.resume_from}")
+            checkpoint = torch.load(args.resume_from, map_location='cpu')
+            model.load_state_dict(checkpoint['model_state_dict'])
+            base_opt.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scheduler_state_dict' in checkpoint:
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                print("✅ Scheduler state cargado")
+            start_step = checkpoint.get('step', 0)
+            best_acc = checkpoint.get('best_acc', 0.0)
+            print(f"✅ Checkpoint cargado! Step: {start_step}, Best acc: {best_acc:.3f}")
+        else:
+            print(f"⚠️  Checkpoint no encontrado: {args.resume_from}")
+            print("   Iniciando desde cero...")
+    else:
+        print("🆕 Iniciando entrenamiento desde cero")
 
     # DHT: deja que el daemon elija puerto si no pasas host_maddr
     dht_kwargs = {"start": True}
