@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Unit test para verificar que los parámetros de gossip se parsean correctamente.
 No requiere iniciar el DHT daemon.
@@ -6,6 +7,8 @@ No requiere iniciar el DHT daemon.
 
 import sys
 import os
+import importlib
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 def test_gossip_args_parsing():
@@ -16,7 +19,7 @@ def test_gossip_args_parsing():
     
     # Test trainGossipCifar
     print("\n1. Testeando trainGossipCifar.py...")
-    from trainGossipCifar import parse_args
+    import trainGossipCifar
     
     # Simular argumentos
     sys.argv = [
@@ -28,7 +31,7 @@ def test_gossip_args_parsing():
         '--epochs', '5'
     ]
     
-    args = parse_args()
+    args = trainGossipCifar.parse_args()
     assert args.gossip_group_size == 8, f"Expected gossip_group_size=8, got {args.gossip_group_size}"
     assert args.gossip_min_group_size == 3, f"Expected gossip_min_group_size=3, got {args.gossip_min_group_size}"
     assert args.gossip_alpha == 0.9, f"Expected gossip_alpha=0.9, got {args.gossip_alpha}"
@@ -38,7 +41,8 @@ def test_gossip_args_parsing():
     
     # Test valores por defecto
     sys.argv = ['trainGossipCifar.py']
-    args = parse_args()
+    importlib.reload(trainGossipCifar)
+    args = trainGossipCifar.parse_args()
     assert args.gossip_group_size == 16, f"Expected default gossip_group_size=16, got {args.gossip_group_size}"
     assert args.gossip_min_group_size == 2, f"Expected default gossip_min_group_size=2, got {args.gossip_min_group_size}"
     assert args.gossip_alpha == 1.0, f"Expected default gossip_alpha=1.0, got {args.gossip_alpha}"
@@ -46,11 +50,7 @@ def test_gossip_args_parsing():
     
     # Test trainGossipImagenet
     print("\n2. Testeando trainGossipImagenet.py...")
-    # Limpiar módulo anterior
-    if 'trainGossipCifar' in sys.modules:
-        del sys.modules['trainGossipCifar']
-    
-    from trainGossipImagenet import parse_args
+    import trainGossipImagenet
     
     sys.argv = [
         'trainGossipImagenet.py',
@@ -59,7 +59,8 @@ def test_gossip_args_parsing():
         '--gossip_alpha', '0.8'
     ]
     
-    args = parse_args()
+    importlib.reload(trainGossipImagenet)
+    args = trainGossipImagenet.parse_args()
     assert args.gossip_group_size == 32, f"Expected gossip_group_size=32, got {args.gossip_group_size}"
     assert args.gossip_min_group_size == 4, f"Expected gossip_min_group_size=4, got {args.gossip_min_group_size}"
     assert args.gossip_alpha == 0.8, f"Expected gossip_alpha=0.8, got {args.gossip_alpha}"
@@ -69,14 +70,13 @@ def test_gossip_args_parsing():
     
     # Test trainGossip
     print("\n3. Testeando trainGossip.py...")
-    if 'trainGossipImagenet' in sys.modules:
-        del sys.modules['trainGossipImagenet']
     
     try:
-        from trainGossip import parse_args
+        import trainGossip
         
         sys.argv = ['trainGossip.py']
-        args = parse_args()
+        importlib.reload(trainGossip)
+        args = trainGossip.parse_args()
         assert args.gossip_group_size == 16, f"Expected default gossip_group_size=16, got {args.gossip_group_size}"
         assert args.gossip_min_group_size == 2, f"Expected default gossip_min_group_size=2, got {args.gossip_min_group_size}"
         assert args.gossip_alpha == 1.0, f"Expected default gossip_alpha=1.0, got {args.gossip_alpha}"
