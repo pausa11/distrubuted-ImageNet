@@ -21,10 +21,7 @@ def build_model():
     )
 
 def get_dataloaders(data_root: str, batch: int, workers: int):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    ])
+    transform = transforms.Compose([ transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), ])
 
     trainDataset = datasets.CIFAR10(root=data_root, train=True, download=True, transform=transform)
     validationDataset = datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform)
@@ -76,39 +73,51 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir:
     }, path)
     return path
 
+def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device):
+    if not os.path.exists(path):
+        return None, -1.0
+    
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint["model_state"])
+    optimizer.load_state_dict(checkpoint["opt_state"])
+    
+    epoch = checkpoint.get("epoch", 0)
+    acc = checkpoint.get("val_accuracy", -1.0)
+    
+    print(f"✓ Checkpoint cargado desde: {path}")
+    print(f"  Época: {epoch}, Accuracy: {acc:.2f}%")
+    
+    return epoch, acc
+
 def parse_arguments():
-    p = argparse.ArgumentParser(description="CIFAR-10 x Hivemind (guardar checkpoint solo si mejora accuracy)")
-    p.add_argument("--data_root", type=str, default="./data", help="Ruta al directorio de datos")
-    p.add_argument("--run_id", type=str, default="my_cifar_run", help="ID lógico de la corrida colaborativa")
+    p = argparse.ArgumentParser(description="CIFAR-10 x Hivemind (versión simplificada)")
+    p.add_argument("--device", type=str, choices=["cpu", "cuda"], default=None, help="Forzar dispositivo (cpu o cuda). Por defecto: auto-detectar")
+    p.add_argument("--use_checkpoint", action="store_true", help="Cargar checkpoint si existe en ./checkpoints/best_checkpoint.pt")
     p.add_argument("--initial_peer", type=str, default=None, help="Multiaddr de un peer inicial para bootstrap (opcional en el primer nodo)")
-    p.add_argument("--host", type=str, default=None, help="Host local para el DHT (opcional)")
-    p.add_argument("--port", type=int, default=None, help="Puerto local para el DHT (opcional)")
-
-    p.add_argument("--batch", type=int, default=32, help="Batch local por step (coincide con batch_size_per_step)")
-    p.add_argument("--target_global_bsz", type=int, default=10_000, help="Muestras globales para cerrar una época")
-    p.add_argument("--epochs", type=int, default=50, help="Número de épocas globales a entrenar antes de parar")
-
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--momentum", type=float, default=0.9)
-
-    p.add_argument("--workers", type=int, default=2, help="num_workers del DataLoader")
-    p.add_argument("--matchmaking_time", type=float, default=3.0)
-    p.add_argument("--averaging_timeout", type=float, default=10.0)
-
-    p.add_argument("--checkpoint_dir", type=str, default="./checkpoints")
     return p.parse_args()
 
 def main():
     args = parse_arguments()
 
-    train_loader, validation_loader = get_dataloaders(args.data_root, args.batch, args.workers)
+    # Configuración fija
+    DATA_ROOT = "./data"
+    RUN_ID = "my_cifar_run"
+    BATCH = 32
+    TARGET_GLOBAL_BSZ = 10_000
+    EPOCHS = 50
+    LR = 1e-3
+    MOMENTUM = 0.9
+    WORKERS = 2
+    MATCHMAKING_TIME = 3.0
+    AVERAGING_TIMEOUT = 10.0
+    CHECKPOINT_DIR = "./checkpoints"
+
+    train_loader, validation_loader = get_dataloaders(DATA_ROOT, BATCH, WORKERS)
 
     model = build_model()
     
     # Configurar DHT
     dht_kwargs = dict(start=True)
-    if args.host: dht_kwargs["host"] = args.host
-    if args.port: dht_kwargs["port"] = args.port
     if args.initial_peer:
         dht_kwargs["initial_peers"] = [args.initial_peer]
 
@@ -120,24 +129,35 @@ def main():
     if not args.initial_peer:
         print("Comparte uno de estos como --initial_peer en otros peers ↑")
 
-    # FIX: Mover el modelo a GPU ANTES de crear el optimizador
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Configurar device
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     model.to(device)
     print(f"\nDevice: {device}")
     
-    # IMPORTANTE: Crear el optimizador base DESPUÉS de mover el modelo
-    base_optimization = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    # Crear el optimizador base DESPUÉS de mover el modelo
+    base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
+
+    # Cargar checkpoint si se solicita
+    best_accuracy = -1.0
+    start_epoch = 0
+    if args.use_checkpoint:
+        ckpt_path = os.path.join(CHECKPOINT_DIR, "best_checkpoint.pt")
+        start_epoch, best_accuracy = load_checkpoint(ckpt_path, model, base_optimizer, device)
 
     # Crear el optimizador de Hivemind
     opt = hivemind.Optimizer(
         dht=dht,
-        run_id=args.run_id,
-        batch_size_per_step=args.batch,
-        target_batch_size=args.target_global_bsz,
-        optimizer=base_optimization,
+        run_id=RUN_ID,
+        batch_size_per_step=BATCH,
+        target_batch_size=TARGET_GLOBAL_BSZ,
+        optimizer=base_optimizer,
         use_local_updates=True,
-        matchmaking_time=args.matchmaking_time,
-        averaging_timeout=args.averaging_timeout,
+        matchmaking_time=MATCHMAKING_TIME,
+        averaging_timeout=AVERAGING_TIMEOUT,
         verbose=True,
     )
 
@@ -146,12 +166,13 @@ def main():
         train_loader.pin_memory = True
         validation_loader.pin_memory = True
 
-    target_epochs = args.epochs
+    target_epochs = EPOCHS
     last_seen_epoch = getattr(opt, "local_epoch", 0)
-    best_accuracy = -1.0
     checkpoint_path = None
 
-    print(f"\nEntrenando hasta {target_epochs} épocas globales (target_batch_size={args.target_global_bsz}).")
+    print(f"\nEntrenando hasta {target_epochs} épocas globales (target_batch_size={TARGET_GLOBAL_BSZ}).")
+    if args.use_checkpoint and best_accuracy > 0:
+        print(f"Continuando desde mejor accuracy: {best_accuracy:.2f}%")
 
     try:
         with tqdm(total=None) as pbar:
@@ -177,7 +198,7 @@ def main():
 
                         # Guardar solo si mejora
                         if val_acc > best_accuracy:
-                            ckpt_path = save_checkpoint(model, base_optimization, args.checkpoint_dir, current_epoch, val_acc)
+                            ckpt_path = save_checkpoint(model, base_optimizer, CHECKPOINT_DIR, current_epoch, val_acc)
                             best_accuracy = val_acc
                             checkpoint_path = ckpt_path
                             tqdm.write(f"↑ Nuevo mejor accuracy ({best_accuracy:.2f}%). Checkpoint guardado: {ckpt_path}")
@@ -194,9 +215,10 @@ def main():
         pass
 
     # Reporte final
-    if checkpoint_path:
+    if checkpoint_path or best_accuracy > 0:
         print(f"\nEntrenamiento finalizado. Mejor accuracy: {best_accuracy:.2f}%")
-        print(f"Mejor checkpoint: {checkpoint_path}")
+        if checkpoint_path:
+            print(f"Mejor checkpoint: {checkpoint_path}")
     else:
         print("\nEntrenamiento finalizado. No se guardaron checkpoints (no hubo mejora).")
 
