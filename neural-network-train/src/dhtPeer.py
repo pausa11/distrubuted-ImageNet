@@ -116,18 +116,23 @@ def main():
 
     model = build_model()
     
-    # Configurar DHT
-    dht_kwargs = dict(start=True)
+    # Configurar DHT - MODIFICADO para escuchar en todas las interfaces
+    dht_kwargs = dict(
+        host_maddrs=["/ip4/0.0.0.0/tcp/0"],  # Escucha en todas las interfaces
+        start=True
+    )
     if args.initial_peer:
         dht_kwargs["initial_peers"] = [args.initial_peer]
 
     dht = hivemind.DHT(**dht_kwargs)
+    
     maddrs = [str(m) for m in dht.get_visible_maddrs()]
     print("\n=== Hivemind DHT ===")
     for m in maddrs:
         print("VISIBLE_MADDR:", m)
     if not args.initial_peer:
-        print("Comparte uno de estos como --initial_peer en otros peers ↑")
+        print("\n⚠️  Usa una dirección que NO sea 127.0.0.1 como --initial_peer")
+        print("    Busca la que tenga tu IP local (192.168.x.x o 10.0.x.x)")
 
     # Configurar device
     if args.device:
