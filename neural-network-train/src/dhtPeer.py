@@ -21,8 +21,10 @@ def build_model():
     )
 
 def get_dataloaders(data_root: str, batch: int, workers: int):
-
-    transform = transforms.Compose([ transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), ])
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    ])
 
     trainDataset = datasets.CIFAR10(root=data_root, train=True, download=True, transform=transform)
     validationDataset = datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform)
@@ -84,7 +86,7 @@ def parse_arguments():
 
     p.add_argument("--batch", type=int, default=32, help="Batch local por step (coincide con batch_size_per_step)")
     p.add_argument("--target_global_bsz", type=int, default=10_000, help="Muestras globales para cerrar una época")
-    p.add_argument("--epochs", type=int, default=5, help="Número de épocas globales a entrenar antes de parar")
+    p.add_argument("--epochs", type=int, default=50, help="Número de épocas globales a entrenar antes de parar")
 
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--momentum", type=float, default=0.9)
@@ -102,8 +104,8 @@ def main():
     train_loader, validation_loader = get_dataloaders(args.data_root, args.batch, args.workers)
 
     model = build_model()
-    base_optimization = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
+    
+    # Configurar DHT
     dht_kwargs = dict(start=True)
     if args.host: dht_kwargs["host"] = args.host
     if args.port: dht_kwargs["port"] = args.port
@@ -118,6 +120,15 @@ def main():
     if not args.initial_peer:
         print("Comparte uno de estos como --initial_peer en otros peers ↑")
 
+    # FIX: Mover el modelo a GPU ANTES de crear el optimizador
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    print(f"\nDevice: {device}")
+    
+    # IMPORTANTE: Crear el optimizador base DESPUÉS de mover el modelo
+    base_optimization = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+
+    # Crear el optimizador de Hivemind
     opt = hivemind.Optimizer(
         dht=dht,
         run_id=args.run_id,
@@ -130,8 +141,7 @@ def main():
         verbose=True,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    # Configurar pin_memory si hay GPU
     if device.type == "cuda":
         train_loader.pin_memory = True
         validation_loader.pin_memory = True
@@ -142,7 +152,6 @@ def main():
     checkpoint_path = None
 
     print(f"\nEntrenando hasta {target_epochs} épocas globales (target_batch_size={args.target_global_bsz}).")
-    print("Device:", device)
 
     try:
         with tqdm(total=None) as pbar:
@@ -154,7 +163,7 @@ def main():
                     opt.zero_grad()
                     loss = F.cross_entropy(model(xb), yb)
                     loss.backward()
-                    opt.step()  # aplica SGD local y coordina averaging en background
+                    opt.step()
 
                     pbar.set_description(f"loss={loss.item():.4f}  epoch_g={getattr(opt,'local_epoch',0)}  best={best_accuracy:.2f}%")
                     pbar.update()
@@ -162,7 +171,7 @@ def main():
                     # Detectar transición de época global
                     current_epoch = getattr(opt, "local_epoch", last_seen_epoch)
                     if current_epoch != last_seen_epoch:
-                        # === Fin de época global: evaluar en validación ===
+                        # Evaluar en validación
                         val_acc = evaluate_accuracy(model, validation_loader, device)
                         tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
 
@@ -180,16 +189,16 @@ def main():
                         # Condición de parada
                         if current_epoch >= target_epochs:
                             tqdm.write(f"✓ Alcanzadas {current_epoch} épocas globales. Terminando...")
-                            raise StopIteration  # salir de ambos bucles
+                            raise StopIteration
     except StopIteration:
         pass
 
     # Reporte final
     if checkpoint_path:
-        print(f"Entrenamiento finalizado. Mejor accuracy: {best_accuracy:.2f}%")
+        print(f"\nEntrenamiento finalizado. Mejor accuracy: {best_accuracy:.2f}%")
         print(f"Mejor checkpoint: {checkpoint_path}")
     else:
-        print("Entrenamiento finalizado. No se guardaron checkpoints (no hubo mejora).")
+        print("\nEntrenamiento finalizado. No se guardaron checkpoints (no hubo mejora).")
 
 if __name__ == "__main__":
     main()
