@@ -14,12 +14,8 @@ if __name__ == "__main__":
 import hivemind
 from torchvision.models import resnet50, ResNet50_Weights
 from PIL import Image
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Optional
 
-
-# =========================
-# Tiny-ImageNet (val) Dataset si está en formato original
-# =========================
 class TinyImageNetValDataset(Dataset):
     """
     Val dataset para el formato original de Tiny-ImageNet-200:
@@ -64,10 +60,6 @@ class TinyImageNetValDataset(Dataset):
             img = self.transform(img)
         return img, target
 
-
-# =========================
-# Modelo: ResNet50 para 200 clases (Tiny-ImageNet-200)
-# =========================
 def build_model(num_classes: int = 200, pretrained: bool = True) -> nn.Module:
     if pretrained:
         weights = ResNet50_Weights.IMAGENET1K_V2
@@ -79,10 +71,6 @@ def build_model(num_classes: int = 200, pretrained: bool = True) -> nn.Module:
     model.fc = nn.Linear(in_features, num_classes)
     return model
 
-
-# =========================
-# DataLoaders para Tiny-ImageNet-200
-# =========================
 def get_dataloaders_tiny_imagenet(
     data_root: str,
     batch: int,
@@ -125,6 +113,7 @@ def get_dataloaders_tiny_imagenet(
         # Ya está reordenado en subcarpetas por clase → ImageFolder
         val_dataset = datasets.ImageFolder(val_dir, transform=val_t)
 
+    # pin_memory solo acelera CPU→CUDA, no MPS
     pin = (device.type == "cuda")
     persistent = workers > 0
 
@@ -154,7 +143,6 @@ def get_dataloaders_tiny_imagenet(
 
     return train_loader, val_loader
 
-
 def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
     model_was_training = model.training
     model.eval()
@@ -162,8 +150,13 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     total = 0
     with torch.no_grad():
         for xb, yb in loader:
-            xb = xb.to(device, non_blocking=True)
-            yb = yb.to(device, non_blocking=True)
+            # Para estabilidad: non_blocking solo CUDA; contiguidad en MPS
+            nb = (device.type == "cuda")
+            xb = xb.to(device, non_blocking=nb)
+            yb = yb.to(device, non_blocking=nb)
+            if device.type == "mps":
+                xb = xb.contiguous()
+
             logits = model(xb)
             pred = logits.argmax(dim=1)
             correct += (pred == yb).sum().item()
@@ -172,7 +165,6 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     if model_was_training:
         model.train()
     return accuracy
-
 
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir: str, epoch_idx: int, acc: float):
     os.makedirs(out_dir, exist_ok=True)
@@ -184,7 +176,6 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir:
         "opt_state": optimizer.state_dict(),
     }, path)
     return path
-
 
 def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device):
     if not os.path.exists(path):
@@ -202,11 +193,10 @@ def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimize
 
     return epoch, acc
 
-
 def parse_arguments():
     p = argparse.ArgumentParser(description="Tiny-ImageNet-200 x ResNet50 x Hivemind")
-    p.add_argument("--device", type=str, choices=["cpu", "cuda"], default=None,
-                   help="Forzar dispositivo (cpu o cuda). Por defecto: auto-detectar")
+    p.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
+                   help="Forzar dispositivo (cpu, cuda o mps). Por defecto: auto-detectar")
     p.add_argument("--use_checkpoint", action="store_true",
                    help="Cargar checkpoint si existe en ./checkpoints/best_checkpoint.pt")
     p.add_argument("--initial_peer", type=str, default=None,
@@ -215,14 +205,28 @@ def parse_arguments():
                    help="Frecuencia de validación (épocas globales). Ej: 5 = validar cada 5.")
     return p.parse_args()
 
+def select_device(cli_device: Optional[str]) -> torch.device:
+    if cli_device:
+        return torch.device(cli_device)
+
+    # Preferir MPS (Apple Silicon) si está disponible
+    mps_available = (
+        getattr(torch.backends, "mps", None) is not None
+        and torch.backends.mps.is_available()
+        and torch.backends.mps.is_built()
+    )
+    if mps_available:
+        return torch.device("mps")
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    return torch.device("cpu")
 
 def main():
     args = parse_arguments()
 
-    # =========================
-    # Configuración (igual que antes, salvo DATA_ROOT)
-    # =========================
-    DATA_ROOT = "./data/tiny-imagenet-200"   # <- como pediste
+    DATA_ROOT = "./data/tiny-imagenet-200"
     RUN_ID = "tiny_imagenet_resnet50"
     BATCH = 32
     TARGET_GLOBAL_BSZ = 30_000
@@ -235,17 +239,25 @@ def main():
     CHECKPOINT_DIR = "./checkpoints"
 
     # Device
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device(args.device)
     print(f"\nDevice: {device}")
+    if device.type == "mps":
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
 
     # DataLoaders (Tiny-ImageNet-200)
     train_loader, val_loader = get_dataloaders_tiny_imagenet(DATA_ROOT, BATCH, WORKERS, device)
 
     # Modelo ResNet50 (200 clases)
-    model = build_model(num_classes=200, pretrained=True).to(device)
+    model = build_model(num_classes=200, pretrained=True)
+
+    # channels_last SOLO en CUDA (no en MPS por bug en backward)
+    if device.type == "cuda":
+        model = model.to(memory_format=torch.channels_last)
+
+    model = model.to(device)
 
     # Optimizador base
     base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
@@ -299,8 +311,16 @@ def main():
         with tqdm(total=None) as pbar:
             while True:
                 for xb, yb in train_loader:
-                    xb = xb.to(device, non_blocking=True)
-                    yb = yb.to(device, non_blocking=True)
+                    # Para estabilidad: non_blocking solo CUDA; contiguidad en MPS
+                    nb = (device.type == "cuda")
+
+                    xb = xb.to(device, non_blocking=nb)
+                    yb = yb.to(device, non_blocking=nb)
+
+                    if device.type == "cuda":
+                        xb = xb.to(memory_format=torch.channels_last)
+                    elif device.type == "mps":
+                        xb = xb.contiguous()
 
                     opt.zero_grad()
                     logits = model(xb)
@@ -342,7 +362,6 @@ def main():
             print(f"Mejor checkpoint: {checkpoint_path}")
     else:
         print("\nEntrenamiento finalizado. No se guardaron checkpoints (no hubo mejora).")
-
 
 if __name__ == "__main__":
     main()
