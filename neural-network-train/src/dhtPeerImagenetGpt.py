@@ -127,11 +127,13 @@ def get_dataloaders_tiny_imagenet(
         prefetch_factor=2 if workers > 0 else None,
         drop_last=False,
     )
+    
+    val_bs = min(64, batch)  # o fija a 32 si quieres ir sobrado
 
     val_loader = DataLoader(
         val_dataset,
         shuffle=False,
-        batch_size=max(256, batch),
+        batch_size=val_bs,
         num_workers=min(2, workers),
         pin_memory=pin,
         persistent_workers=(min(2, workers) > 0),
