@@ -14,7 +14,42 @@ if __name__ == "__main__":
 
 import hivemind
 
-# Dataset personalizado para Tiny ImageNet
+# =========================
+# Utilidades de dispositivo
+# =========================
+def pick_device(forced: str | None) -> torch.device:
+    """
+    Retorna torch.device considerando --device y disponibilidad real.
+    Prioridad auto: cuda > mps > cpu.
+    Si se fuerza un device y no está disponible, cae a la mejor alternativa posible.
+    """
+    def mps_available() -> bool:
+        try:
+            return getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+        except Exception:
+            return False
+
+    if forced:
+        forced = forced.lower()
+        if forced == "cuda" and torch.cuda.is_available():
+            return torch.device("cuda")
+        if forced == "mps" and mps_available():
+            return torch.device("mps")
+        if forced == "cpu":
+            return torch.device("cpu")
+        # Forzado pero no disponible → degradar
+        print(f"⚠️  '{forced}' no disponible. Usando mejor alternativa.")
+    # Auto
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if mps_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+# =========================
+# Dataset Tiny ImageNet
+# =========================
 class TinyImageNetDataset(Dataset):
     def __init__(self, root_dir, split='train', transform=None):
         """
@@ -101,10 +136,8 @@ class TinyImageNetDataset(Dataset):
         
         try:
             image = Image.open(img_path).convert('RGB')
-            
             if self.transform:
                 image = self.transform(image)
-            
             return image, label
         except Exception as e:
             print(f"Error cargando {img_path}: {e}")
@@ -114,78 +147,57 @@ class TinyImageNetDataset(Dataset):
                 dummy_img = self.transform(dummy_img)
             return dummy_img, label
 
+
 def build_model(num_classes=200):
     """Crea ResNet50 para Tiny ImageNet (200 clases)"""
     model = models.resnet50(pretrained=False)
-    
-    # Modificar la capa final para 200 clases
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     
     print(f"✓ Modelo: ResNet50 ({num_classes} clases)")
-    
-    # Contar parámetros
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Parámetros totales: {total_params:,}")
     print(f"  Parámetros entrenables: {trainable_params:,}")
-    
     return model
+
 
 def get_dataloaders(data_root: str, batch: int, workers: int):
     """Carga Tiny ImageNet con transformaciones apropiadas"""
-    
-    # Transformaciones para entrenamiento (con augmentation)
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(64),  # Tiny ImageNet es 64x64
+        transforms.RandomResizedCrop(64),
         transforms.RandomHorizontalFlip(),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                           std=[0.229, 0.224, 0.225]),  # ImageNet stats
+                             std=[0.229, 0.224, 0.225]),
     ])
-    
-    # Transformaciones para validación (sin augmentation)
     val_transform = transforms.Compose([
         transforms.Resize(64),
         transforms.CenterCrop(64),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                           std=[0.229, 0.224, 0.225]),
+                             std=[0.229, 0.224, 0.225]),
     ])
-    
-    # Crear datasets
-    trainDataset = TinyImageNetDataset(
-        root_dir=data_root,
-        split='train',
-        transform=train_transform
-    )
-    
-    validationDataset = TinyImageNetDataset(
-        root_dir=data_root,
-        split='val',
-        transform=val_transform
-    )
-    
-    # Crear dataloaders
+    trainDataset = TinyImageNetDataset(root_dir=data_root, split='train', transform=train_transform)
+    validationDataset = TinyImageNetDataset(root_dir=data_root, split='val', transform=val_transform)
     train_loader = DataLoader(
         trainDataset,
         shuffle=True,
         batch_size=batch,
         num_workers=workers,
-        pin_memory=False,
+        pin_memory=False,   # se activará más abajo solo en CUDA
         drop_last=False,
     )
-    
     validation_loader = DataLoader(
         validationDataset,
         shuffle=False,
-        batch_size=max(128, batch),  # Batch más grande para validación
+        batch_size=max(128, batch),
         num_workers=min(2, workers),
-        pin_memory=False,
+        pin_memory=False,   # se activará más abajo solo en CUDA
         drop_last=False,
     )
-    
     return train_loader, validation_loader
+
 
 def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple:
     """Evalúa accuracy (top-1 y top-5)"""
@@ -193,29 +205,22 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     correct_top1 = 0
     correct_top5 = 0
     total = 0
-    
     with torch.no_grad():
         for xb, yb in loader:
             xb = xb.to(device, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
-            
             logits = model(xb)
-            
-            # Top-1 accuracy
             pred_top1 = logits.argmax(dim=1)
             correct_top1 += (pred_top1 == yb).sum().item()
-            
-            # Top-5 accuracy
             _, pred_top5 = logits.topk(5, dim=1)
-            correct_top5 += sum([yb[i] in pred_top5[i] for i in range(yb.size(0))])
-            
+            # yb[i] in pred_top5[i] usando operaciones tensoriales
+            correct_top5 += (pred_top5.eq(yb.view(-1, 1))).sum().item()
             total += yb.size(0)
-    
     acc_top1 = 100.0 * correct_top1 / max(1, total)
     acc_top5 = 100.0 * correct_top5 / max(1, total)
-    
     model.train()
     return acc_top1, acc_top5
+
 
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir: str, 
                    epoch_idx: int, acc_top1: float, acc_top5: float):
@@ -230,32 +235,29 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir:
     }, path)
     return path
 
+
 def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device):
     if not os.path.exists(path):
         return None, -1.0, -1.0
-    
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model_state"])
     optimizer.load_state_dict(checkpoint["opt_state"])
-    
     epoch = checkpoint.get("epoch", 0)
     acc_top1 = checkpoint.get("val_accuracy_top1", -1.0)
     acc_top5 = checkpoint.get("val_accuracy_top5", -1.0)
-    
     print(f"✓ Checkpoint cargado desde: {path}")
     print(f"  Época: {epoch}, Top-1: {acc_top1:.2f}%, Top-5: {acc_top5:.2f}%")
-    
     return epoch, acc_top1, acc_top5
+
 
 def parse_arguments():
     p = argparse.ArgumentParser(description="Tiny ImageNet x Hivemind - ResNet50")
-    p.add_argument("--device", type=str, choices=["cpu", "cuda"], default=None, 
-                   help="Forzar dispositivo (cpu o cuda). Por defecto: auto-detectar")
+    p.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
+                   help="Forzar dispositivo (cpu, cuda o mps). Por defecto: auto-detectar")
     p.add_argument("--use_checkpoint", action="store_true", 
                    help="Cargar checkpoint si existe")
     p.add_argument("--initial_peer", type=str, default=None, 
                    help="Multiaddr de un peer inicial para bootstrap")
-    
     # Parámetros de optimización
     p.add_argument("--target_batch_size", type=int, default=100000, 
                    help="Batch global objetivo (default: 100000 = ~1 época)")
@@ -265,14 +267,14 @@ def parse_arguments():
                    help="Tiempo de búsqueda de peers (default: 2.0s)")
     p.add_argument("--averaging_timeout", type=float, default=10.0, 
                    help="Timeout de sincronización (default: 10.0s)")
-    p.add_argument("--num_epochs", type=int, default=5, 
-                   help="Número de épocas globales (default: 50)")
+    p.add_argument("--num_epochs", type=int, default=2, 
+                   help="Número de épocas globales (default: 5)")
     p.add_argument("--compression", action="store_true", 
                    help="Usar compresión FP16")
     p.add_argument("--learning_rate", type=float, default=0.1, 
                    help="Learning rate inicial (default: 0.1)")
-    
     return p.parse_args()
+
 
 def main():
     args = parse_arguments()
@@ -283,24 +285,19 @@ def main():
     LR = args.learning_rate
     MOMENTUM = 0.9
     WEIGHT_DECAY = 1e-4
-    WORKERS = 4  # Más workers para dataset más grande
+    WORKERS = 4
     CHECKPOINT_DIR = "./checkpoints"
 
-    # Verificar que existe el dataset
+    # Verificar dataset
     if not os.path.exists(DATA_ROOT):
         print(f"❌ ERROR: No se encontró el dataset en {DATA_ROOT}")
-        print(f"   Verifica que la estructura sea:")
+        print(f"   Estructura esperada:")
         print(f"   {DATA_ROOT}/")
-        print(f"   ├── train/")
-        print(f"   │   ├── n01443537/")
-        print(f"   │   │   └── images/")
-        print(f"   │   └── ...")
-        print(f"   └── val/")
-        print(f"       ├── images/")
-        print(f"       └── val_annotations.txt")
+        print(f"   ├── train/<clase>/images/*.JPEG")
+        print(f"   └── val/images/*.JPEG + val_annotations.txt")
         return
 
-    # Usar parámetros optimizados
+    # Parámetros
     BATCH = args.local_batch_size
     TARGET_GLOBAL_BSZ = args.target_batch_size
     EPOCHS = args.num_epochs
@@ -321,11 +318,10 @@ def main():
     print(f"Compresión FP16:          {'✓ Activada' if args.compression else '✗ Desactivada'}")
     print("="*70 + "\n")
 
-    # Cargar datos
+    # Datos
     print("Cargando dataset...")
     train_loader, validation_loader = get_dataloaders(DATA_ROOT, BATCH, WORKERS)
     
-    # Calcular sincronizaciones esperadas
     train_size = len(train_loader.dataset)
     syncs_per_epoch = train_size // TARGET_GLOBAL_BSZ
     if syncs_per_epoch == 0:
@@ -337,19 +333,14 @@ def main():
     print(f"Total sincronizaciones:   {total_syncs}")
     print("="*70 + "\n")
 
-    # Construir modelo
+    # Modelo
     model = build_model(num_classes=200)
     
-    # Configurar DHT
-    dht_kwargs = dict(
-        host_maddrs=["/ip4/0.0.0.0/tcp/0"],
-        start=True
-    )
+    # DHT
+    dht_kwargs = dict(host_maddrs=["/ip4/0.0.0.0/tcp/0"], start=True)
     if args.initial_peer:
         dht_kwargs["initial_peers"] = [args.initial_peer]
-
     dht = hivemind.DHT(**dht_kwargs)
-    
     maddrs = [str(m) for m in dht.get_visible_maddrs()]
     print("\n=== Hivemind DHT ===")
     for m in maddrs:
@@ -357,16 +348,12 @@ def main():
     if not args.initial_peer:
         print("\n⚠️  Primer nodo iniciado. Los demás nodos deben usar --initial_peer")
 
-    # Configurar device
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    # Device (con soporte MPS)
+    device = pick_device(args.device)
     model.to(device)
     print(f"\nDevice: {device}")
-    
-    # Crear el optimizador base (SGD con momentum y weight decay)
+
+    # Optimizer base
     base_optimizer = torch.optim.SGD(
         model.parameters(), 
         lr=LR, 
@@ -374,7 +361,7 @@ def main():
         weight_decay=WEIGHT_DECAY
     )
 
-    # Cargar checkpoint si se solicita
+    # Checkpoint
     best_accuracy_top1 = -1.0
     best_accuracy_top5 = -1.0
     start_epoch = 0
@@ -384,7 +371,7 @@ def main():
             ckpt_path, model, base_optimizer, device
         )
 
-    # Configurar compresión si está habilitada
+    # Compresión
     compression_config = None
     if args.compression:
         try:
@@ -393,10 +380,10 @@ def main():
                 min_compression_ratio=1.5
             )
             print("✓ Compresión FP16 habilitada")
-        except:
+        except Exception:
             print("⚠️  Compresión no disponible en esta versión de Hivemind")
 
-    # Crear el optimizador de Hivemind
+    # Optimizer Hivemind
     opt_kwargs = dict(
         dht=dht,
         run_id=RUN_ID,
@@ -408,13 +395,11 @@ def main():
         averaging_timeout=AVERAGING_TIMEOUT,
         verbose=True,
     )
-    
     if compression_config:
         opt_kwargs['grad_compression'] = compression_config
-    
     opt = hivemind.Optimizer(**opt_kwargs)
 
-    # Configurar pin_memory si hay GPU
+    # pin_memory solo en CUDA
     if device.type == "cuda":
         train_loader.pin_memory = True
         validation_loader.pin_memory = True
@@ -427,7 +412,7 @@ def main():
     if args.use_checkpoint and best_accuracy_top1 > 0:
         print(f"Continuando desde Top-1: {best_accuracy_top1:.2f}%, Top-5: {best_accuracy_top5:.2f}%")
 
-    # Contadores
+    # Loop de entrenamiento
     sync_count = 0
     import time
     start_time = time.time()
@@ -453,20 +438,20 @@ def main():
                     )
                     pbar.update()
 
-                    # Detectar transición de época global
+                    # Transición de época global
                     current_epoch = getattr(opt, "local_epoch", last_seen_epoch)
                     if current_epoch != last_seen_epoch:
                         sync_count += 1
                         elapsed = time.time() - start_time
                         
-                        # Evaluar en validación
+                        # Validación
                         val_acc_top1, val_acc_top5 = evaluate_accuracy(model, validation_loader, device)
                         tqdm.write(
                             f"[Época {current_epoch}] Top-1: {val_acc_top1:.2f}%  Top-5: {val_acc_top5:.2f}%  "
                             f"Syncs: {sync_count}  Tiempo: {elapsed/60:.1f}min"
                         )
 
-                        # Guardar solo si mejora top-1
+                        # Guardar si mejora top-1
                         if val_acc_top1 > best_accuracy_top1:
                             ckpt_path = save_checkpoint(
                                 model, base_optimizer, CHECKPOINT_DIR, 
@@ -479,7 +464,7 @@ def main():
                         
                         last_seen_epoch = current_epoch
 
-                        # Condición de parada
+                        # Parada
                         if current_epoch >= target_epochs:
                             tqdm.write(f"✓ Alcanzadas {current_epoch} épocas. Terminando...")
                             raise StopIteration
@@ -500,6 +485,7 @@ def main():
     if checkpoint_path:
         print(f"Mejor checkpoint:         {checkpoint_path}")
     print("="*70 + "\n")
+
 
 if __name__ == "__main__":
     main()
