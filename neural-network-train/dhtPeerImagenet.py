@@ -140,6 +140,150 @@ class GCSImageFolder(Dataset):
             
         return img, label
 
+
+# =========================
+#  Threaded GCS Dataset
+# =========================
+import concurrent.futures
+import queue
+import random
+
+class ThreadedGCSDataset(torch.utils.data.IterableDataset):
+    def __init__(self, bucket_name: str, prefix: str, transform=None, public_access: bool = False, 
+                 buffer_size: int = 256, num_threads: int = 16, shuffle: bool = False):
+        """
+        A Threaded IterableDataset that pre-fetches images from GCS using a thread pool.
+        This bypasses the need for multiprocessing workers (which crash on Mac/MPS)
+        while still allowing parallel downloads.
+        """
+        if not GCS_AVAILABLE:
+             raise ImportError("google-cloud-storage is required.")
+
+        self.bucket_name = bucket_name
+        self.prefix = prefix.rstrip('/')
+        self.transform = transform
+        self.public_access = public_access
+        self.buffer_size = buffer_size
+        self.num_threads = num_threads
+        self.shuffle = shuffle
+        
+        # Reuse the same caching logic / discovery as GCSImageFolder
+        # We can actually just instantiate a temporary GCSImageFolder to get the list
+        # or duplicate the logic. To avoid code duplication, let's reuse the logic 
+        # by composition or just copying the discovery part. 
+        # For simplicity and speed, let's just do the discovery here (it's fast if cached).
+        
+        cache_key = hashlib.md5(f"{bucket_name}_{self.prefix}".encode()).hexdigest()
+        cache_file = f"gcs_cache_{cache_key}.json"
+        
+        self.samples = []
+        self.classes = []
+        
+        if os.path.exists(cache_file):
+            print(f"[Threaded] Found GCS cache: {cache_file}")
+            try:
+                with open(cache_file, 'r') as f:
+                    data = json.load(f)
+                    self.classes = data['classes']
+                    self.samples = data['samples']
+            except Exception:
+                pass
+        
+        if not self.samples:
+            # Fallback: use GCSImageFolder logic to discover (lazy way: create one and steal its samples)
+            print("[Threaded] Cache missing. performing discovery...")
+            temp_ds = GCSImageFolder(bucket_name, prefix, public_access=public_access)
+            self.samples = temp_ds.samples
+            self.classes = temp_ds.classes
+            
+        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
+        print(f"[Threaded] Initialized with {len(self.samples)} images. Threads={num_threads}")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def _download_func(self, sample):
+        blob_name, class_name = sample
+        label = self.class_to_idx[class_name]
+        
+        # Each thread needs its own client? 
+        # Actually storage.Client is NOT thread-safe for some ops, but simple downloading 
+        # usually works if we create a client per thread or use a thread-local one.
+        # Safest is a client per thread.
+        
+        if not hasattr(self.local, 'client'):
+            if self.public_access:
+                self.local.client = storage.Client.create_anonymous_client()
+            else:
+                self.local.client = storage.Client()
+            self.local.bucket = self.local.client.bucket(self.bucket_name)
+            
+        try:
+            blob = self.local.bucket.blob(blob_name)
+            image_bytes = blob.download_as_bytes()
+            img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+            if self.transform:
+                img = self.transform(img)
+            return img, label
+        except Exception as e:
+            print(f"Error downloading {blob_name}: {e}")
+            return None
+
+    def __iter__(self):
+        # Create thread-local storage
+        import threading
+        self.local = threading.local()
+        
+        indices = list(range(len(self.samples)))
+        if self.shuffle:
+            random.shuffle(indices)
+            
+        # We will yield from a generator that pushes tasks to executor
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            # Submit initial batch
+            futures = []
+            
+            # Helper to submit more
+            def submit_more(idx_iterator, count):
+                added = 0
+                for _ in range(count):
+                    try:
+                        i = next(idx_iterator)
+                        futures.append(executor.submit(self._download_func, self.samples[i]))
+                        added += 1
+                    except StopIteration:
+                        break
+                return added
+
+            idx_iter = iter(indices)
+            
+            # Fill buffer
+            submit_more(idx_iter, self.buffer_size)
+            
+            # Yield results as they complete (in order of submission to keep it simple, 
+            # or as_completed? as_completed is better for throughput but might reorder 
+            # (which is fine if shuffled).
+            # BUT, as_completed yields futures. We need to keep submitting new ones.
+            
+            # Let's use a simpler approach: a queue and a producer thread?
+            # Or just iterate futures. pop(0) -> wait -> yield -> submit(1)
+            
+            while futures:
+                # Wait for the oldest future (FIFO) - ensures we don't run out of memory 
+                # if some images are huge, and keeps order somewhat controlled (though order doesn't matter much)
+                # Actually, for max throughput, we might want `as_completed` but managing the buffer 
+                # refill is trickier.
+                # Let's stick to FIFO for simplicity of implementation:
+                
+                f = futures.pop(0)
+                result = f.result() # Block until this one is ready
+                
+                # Refill one
+                submit_more(idx_iter, 1)
+                
+                if result is not None:
+                    yield result
+
 # =========================
 #  ImageNet-1K Dataloaders
 # =========================
@@ -179,12 +323,11 @@ def get_dataloaders_imagenet(
         normalize,
     ])
 
+    # pin_memory solo ayuda CPU->CUDA; en MPS/CPU no aporta
+    pin = (device.type == "cuda")
+
     if bucket_name:
         print(f"Using GCS Bucket: {bucket_name}")
-        
-        # Determine prefixes
-        # If explicit prefix is given, use it.
-        # Otherwise, fall back to data_root/train (or just "train" if data_root is empty/None)
         
         if train_prefix:
             final_train_prefix = train_prefix
@@ -199,8 +342,26 @@ def get_dataloaders_imagenet(
         print(f"  Train prefix: {final_train_prefix}")
         print(f"  Val prefix:   {final_val_prefix}")
         
-        train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t, public_access=gcs_public)
-        val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t, public_access=gcs_public)
+        # OPTIMIZATION: Use ThreadedGCSDataset if workers=0 (e.g. on Mac)
+        if workers == 0:
+            print("🚀 Optimizing for WORKERS=0: Using ThreadedGCSDataset for parallel downloads!")
+            train_dataset = ThreadedGCSDataset(bucket_name, final_train_prefix, transform=train_t, 
+                                               public_access=gcs_public, shuffle=True, num_threads=16)
+            # Validation doesn't strictly need shuffling, but threading helps speed
+            val_dataset   = ThreadedGCSDataset(bucket_name, final_val_prefix,   transform=val_t, 
+                                               public_access=gcs_public, shuffle=False, num_threads=8)
+            
+            # DataLoader for IterableDataset must have shuffle=False (dataset handles it)
+            # and num_workers=0
+            train_loader = DataLoader(train_dataset, batch_size=batch, num_workers=0, pin_memory=pin)
+            val_loader   = DataLoader(val_dataset,   batch_size=min(128, batch), num_workers=0, pin_memory=pin)
+            
+            return train_loader, val_loader
+            
+        else:
+            # Standard behavior for Linux/CUDA with multiple workers
+            train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t, public_access=gcs_public)
+            val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t, public_access=gcs_public)
         
     else:
         train_dir = os.path.join(data_root, "train")
@@ -274,7 +435,15 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
              loader = itertools.islice(loader, max_batches)
              total_batches = max_batches
         else:
-             total_batches = len(loader)
+             try:
+                 total_batches = len(loader)
+             except TypeError:
+                 # Fallback for IterableDataset which might not have len() on loader
+                 # but we can try dataset len / batch_size
+                 if hasattr(loader, 'dataset') and hasattr(loader.dataset, '__len__') and hasattr(loader, 'batch_size'):
+                     total_batches = len(loader.dataset) // loader.batch_size
+                 else:
+                     total_batches = None
 
         for xb, yb in tqdm(loader, total=total_batches, desc="Validating", leave=False):
             nb = (device.type == "cuda")  # non_blocking solo CUDA
@@ -350,6 +519,8 @@ def parse_arguments():
                    help="Número máximo de batches para validar (default: 100). None para validar todo.")
     p.add_argument("--no_initial_val", action="store_true",
                    help="No forzar validación en la época 1.")
+    p.add_argument("--epochs", type=int, default=10,
+                   help="Número total de épocas globales (default: 10).")
     return p.parse_args()
 
 
@@ -388,7 +559,7 @@ def main():
     RUN_ID = "imagenet1k_resnet50"
     BATCH = args.batch_size
     TARGET_GLOBAL_BSZ = args.target_batch_size
-    EPOCHS = 2
+    EPOCHS = args.epochs
     LR = 1e-3
     MOMENTUM = 0.9
     WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
