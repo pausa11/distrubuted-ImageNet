@@ -305,6 +305,10 @@ def parse_arguments():
                    help="Prefijo específico para datos de validación en GCS (ej: ILSVRC2012_img_val)")
     p.add_argument("--gcs_public", action="store_true",
                    help="Usar acceso anónimo para bucket público (sin credenciales)")
+    p.add_argument("--batch_size", type=int, default=64,
+                   help="Batch size local (por defecto: 64). Reducir si hay OOM.")
+    p.add_argument("--target_batch_size", type=int, default=30000,
+                   help="Batch size global objetivo para Hivemind (por defecto: 30000).")
     return p.parse_args()
 
 
@@ -341,8 +345,8 @@ def main():
         DATA_ROOT = os.path.expanduser("~/data/imagenet-1k")
         
     RUN_ID = "imagenet1k_resnet50"
-    BATCH = 64
-    TARGET_GLOBAL_BSZ = 30_000
+    BATCH = args.batch_size
+    TARGET_GLOBAL_BSZ = args.target_batch_size
     EPOCHS = 2
     LR = 1e-3
     MOMENTUM = 0.9
