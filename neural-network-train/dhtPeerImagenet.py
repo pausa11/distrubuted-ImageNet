@@ -459,7 +459,7 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     return accuracy
 
 
-def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir: str, epoch_idx: int, acc: float, filename: str = "best_checkpoint.pt"):
+def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, scheduler, out_dir: str, epoch_idx: int, acc: float, filename: str = "best_checkpoint.pt"):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, filename)
     torch.save({
@@ -467,17 +467,21 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir:
         "val_accuracy": acc,
         "model_state": model.state_dict(),
         "opt_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict() if scheduler else None,
     }, path)
     return path
 
 
-def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device):
+def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, scheduler, device: torch.device):
     if not os.path.exists(path):
         return None, -1.0
 
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model_state"])
     optimizer.load_state_dict(checkpoint["opt_state"])
+    
+    if scheduler and "scheduler_state" in checkpoint and checkpoint["scheduler_state"] is not None:
+        scheduler.load_state_dict(checkpoint["scheduler_state"])
 
     epoch = checkpoint.get("epoch", 0)
     acc = checkpoint.get("val_accuracy", -1.0)
@@ -515,8 +519,8 @@ def parse_arguments():
                    help="Número máximo de batches para validar (default: 100). None para validar todo.")
     p.add_argument("--no_initial_val", action="store_true",
                    help="No forzar validación en la época 1.")
-    p.add_argument("--epochs", type=int, default=10,
-                   help="Número total de épocas globales (default: 10).")
+    p.add_argument("--epochs", type=int, default=2000,
+                   help="Número total de épocas globales (default: 2000).")
     p.add_argument("--host_port", type=int, default=31337,
                    help="Puerto TCP para escuchar conexiones entrantes (default: 31337).")
     return p.parse_args()
@@ -558,7 +562,7 @@ def main():
     BATCH = args.batch_size
     TARGET_GLOBAL_BSZ = args.target_batch_size
     EPOCHS = args.epochs
-    LR = 1e-3
+    LR = 0.1
     MOMENTUM = 0.9
     WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
     MATCHMAKING_TIME = 15.0
@@ -597,7 +601,7 @@ def main():
         model_on_device = model_on_device.to(memory_format=torch.channels_last)
 
     # Optimizador base
-    base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
+    base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM, weight_decay=1e-4)
 
     # DHT
     dht_kwargs = dict(
@@ -635,6 +639,9 @@ def main():
         # Si usas GCS, puede que quieras aumentar el timeout si la carga de datos es lenta
     )
 
+    # Scheduler
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(opt, milestones=[30, 60, 90], gamma=0.1)
+
     # --- LOAD CHECKPOINT AFTER OPT CREATION ---
     if args.use_checkpoint:
         # Intentar cargar latest primero
@@ -644,7 +651,7 @@ def main():
         if os.path.exists(latest_path):
             print(f"Intentando reanudar desde LATEST: {latest_path}")
             # IMPORTANTE: Pasamos 'opt' (Hivemind Optimizer) en lugar de 'base_optimizer'
-            start_epoch, acc = load_checkpoint(latest_path, model, opt, device)
+            start_epoch, acc = load_checkpoint(latest_path, model, opt, scheduler, device)
             
             if os.path.exists(best_path):
                 checkpoint = torch.load(best_path, map_location='cpu')
@@ -653,7 +660,7 @@ def main():
                 best_accuracy = acc
         elif os.path.exists(best_path):
             print(f"Intentando reanudar desde BEST: {best_path}")
-            start_epoch, best_accuracy = load_checkpoint(best_path, model, opt, device)
+            start_epoch, best_accuracy = load_checkpoint(best_path, model, opt, scheduler, device)
         else:
             print("No se encontraron checkpoints para cargar.")
     # ------------------------------------------
@@ -730,10 +737,10 @@ def main():
                             tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
 
                             # SIEMPRE guardar el latest checkpoint (usando opt, no base_optimizer)
-                            save_checkpoint(model, opt, CHECKPOINT_DIR, current_epoch, val_acc, filename="latest_checkpoint.pt")
+                            save_checkpoint(model, opt, scheduler, CHECKPOINT_DIR, current_epoch, val_acc, filename="latest_checkpoint.pt")
                             
                             if val_acc > best_accuracy:
-                                ckpt_path = save_checkpoint(model, opt, CHECKPOINT_DIR, current_epoch, val_acc, filename="best_checkpoint.pt")
+                                ckpt_path = save_checkpoint(model, opt, scheduler, CHECKPOINT_DIR, current_epoch, val_acc, filename="best_checkpoint.pt")
                                 best_accuracy = val_acc
                                 checkpoint_path = ckpt_path
                                 tqdm.write(f"↑ Nuevo mejor accuracy ({best_accuracy:.2f}%). Checkpoint guardado: {ckpt_path}")
@@ -741,6 +748,7 @@ def main():
                                 tqdm.write(f"↔ No mejora (best={best_accuracy:.2f}%). Guardado latest_checkpoint.pt.")
 
                         last_seen_epoch = current_epoch
+                        scheduler.step()
 
                         if current_epoch >= target_epochs:
                             tqdm.write(f"✓ Alcanzadas {current_epoch} épocas globales. Terminando...")
