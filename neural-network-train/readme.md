@@ -22,11 +22,7 @@ Esto abrirá una ventana en tu navegador. Inicia sesión con la cuenta de Google
 Para iniciar un nodo de entrenamiento (peer), ejecuta el siguiente comando desde la carpeta raíz del proyecto:
 
 ```bash
-python3 src/dhtPeerImagenet.py \
-  --bucket_name caso-estudio-2 \
-  --train_prefix ILSVRC2012_img_train \
-  --val_prefix ILSVRC2012_img_val \
-  --device mps
+python3 dhtPeerImagenet.py --bucket_name caso-estudio-2 --train_prefix ILSVRC2012_img_train --val_prefix ILSVRC2012_img_val --device mps --use_checkpoint
 ```
 
 ### Explicación de los argumentos:
