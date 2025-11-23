@@ -233,13 +233,22 @@ def build_model(num_classes: int = 1000, pretrained: bool = True) -> nn.Module:
 # =========================
 #  Eval, checkpoints, args
 # =========================
-def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
+import itertools
+
+def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device, max_batches: Optional[int] = None) -> float:
     model_was_training = model.training
     model.eval()
     correct = 0
     total = 0
     with torch.no_grad():
-        for xb, yb in loader:
+        # Limit validation to max_batches if specified
+        if max_batches is not None:
+             loader = itertools.islice(loader, max_batches)
+             total_batches = max_batches
+        else:
+             total_batches = len(loader)
+
+        for xb, yb in tqdm(loader, total=total_batches, desc="Validating", leave=False):
             nb = (device.type == "cuda")  # non_blocking solo CUDA
             xb = xb.to(device, non_blocking=nb)
             yb = yb.to(device, non_blocking=nb)
@@ -309,6 +318,10 @@ def parse_arguments():
                    help="Batch size local (por defecto: 64). Reducir si hay OOM.")
     p.add_argument("--target_batch_size", type=int, default=30000,
                    help="Batch size global objetivo para Hivemind (por defecto: 30000).")
+    p.add_argument("--val_batches", type=int, default=100,
+                   help="Número máximo de batches para validar (default: 100). None para validar todo.")
+    p.add_argument("--no_initial_val", action="store_true",
+                   help="No forzar validación en la época 1.")
     return p.parse_args()
 
 
@@ -458,9 +471,11 @@ def main():
 
                     current_epoch = getattr(opt, "local_epoch", last_seen_epoch)
                     if current_epoch != last_seen_epoch:
-                        do_eval = (current_epoch == 1) or (current_epoch % args.val_every == 0) or (current_epoch >= target_epochs)
+                        force_initial = (current_epoch == 1 and not args.no_initial_val)
+                        do_eval = force_initial or (current_epoch % args.val_every == 0) or (current_epoch >= target_epochs)
                         if do_eval:
-                            val_acc = evaluate_accuracy(model, val_loader, device)
+                            tqdm.write(f"Starting validation for epoch {current_epoch} (max_batches={args.val_batches})...")
+                            val_acc = evaluate_accuracy(model, val_loader, device, max_batches=args.val_batches)
                             tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
 
                             if val_acc > best_accuracy:
