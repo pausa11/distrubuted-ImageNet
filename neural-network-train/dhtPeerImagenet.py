@@ -28,7 +28,7 @@ from typing import Optional
 #  GCS Dataset
 # =========================
 class GCSImageFolder(Dataset):
-    def __init__(self, bucket_name: str, prefix: str, transform=None):
+    def __init__(self, bucket_name: str, prefix: str, transform=None, public_access: bool = False):
         """
         A Dataset that streams images from a GCS bucket.
         Expects structure: prefix/class_name/image.jpg
@@ -39,13 +39,18 @@ class GCSImageFolder(Dataset):
         self.bucket_name = bucket_name
         self.prefix = prefix.rstrip('/')
         self.transform = transform
+        self.public_access = public_access
         
         # Do NOT initialize client here to avoid fork-safety issues with multiprocessing
         self.client = None
         self.bucket = None
         
         # We need a temporary client just for listing blobs during init (main process)
-        tmp_client = storage.Client()
+        # We need a temporary client just for listing blobs during init (main process)
+        if self.public_access:
+            tmp_client = storage.Client.create_anonymous_client()
+        else:
+            tmp_client = storage.Client()
         tmp_bucket = tmp_client.bucket(bucket_name)
         
         print(f"Listing blobs in gs://{bucket_name}/{self.prefix} ... (this may take a while)")
@@ -87,8 +92,12 @@ class GCSImageFolder(Dataset):
         label = self.class_to_idx[class_name]
         
         # Lazy initialization of GCS client (per worker process)
+        # Lazy initialization of GCS client (per worker process)
         if self.client is None:
-            self.client = storage.Client()
+            if self.public_access:
+                self.client = storage.Client.create_anonymous_client()
+            else:
+                self.client = storage.Client()
             self.bucket = self.client.bucket(self.bucket_name)
         
         # Download image bytes
@@ -113,7 +122,10 @@ def get_dataloaders_imagenet(
     device: torch.device,
     bucket_name: Optional[str] = None,
     train_prefix: Optional[str] = None,
-    val_prefix: Optional[str] = None
+    bucket_name: Optional[str] = None,
+    train_prefix: Optional[str] = None,
+    val_prefix: Optional[str] = None,
+    gcs_public: bool = False
 ):
     """
     Espera un árbol:
@@ -161,8 +173,8 @@ def get_dataloaders_imagenet(
         print(f"  Train prefix: {final_train_prefix}")
         print(f"  Val prefix:   {final_val_prefix}")
         
-        train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t)
-        val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t)
+        train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t, public_access=gcs_public)
+        val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t, public_access=gcs_public)
         
     else:
         train_dir = os.path.join(data_root, "train")
@@ -293,6 +305,8 @@ def parse_arguments():
                    help="Prefijo específico para datos de entrenamiento en GCS (ej: ILSVRC2012_img_train)")
     p.add_argument("--val_prefix", type=str, default=None,
                    help="Prefijo específico para datos de validación en GCS (ej: ILSVRC2012_img_val)")
+    p.add_argument("--gcs_public", action="store_true",
+                   help="Usar acceso anónimo para bucket público (sin credenciales)")
     return p.parse_args()
 
 
@@ -353,7 +367,10 @@ def main():
         DATA_ROOT, BATCH, WORKERS, device, 
         bucket_name=args.bucket_name,
         train_prefix=args.train_prefix,
-        val_prefix=args.val_prefix
+        bucket_name=args.bucket_name,
+        train_prefix=args.train_prefix,
+        val_prefix=args.val_prefix,
+        gcs_public=args.gcs_public
     )
 
     # Modelo ResNet50 (1000 clases)
