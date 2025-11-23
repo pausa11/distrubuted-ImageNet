@@ -30,7 +30,7 @@ from typing import Optional
 #  GCS Dataset
 # =========================
 class GCSImageFolder(Dataset):
-    def __init__(self, bucket_name: str, prefix: str, transform=None):
+    def __init__(self, bucket_name: str, prefix: str, transform=None, classes: list = None):
         """
         A Dataset that streams images from a GCS bucket.
         Expects structure: prefix/class_name/image.jpg
@@ -101,6 +101,15 @@ class GCSImageFolder(Dataset):
                     'classes': self.classes,
                     'samples': self.samples
                 }, f)
+        
+        # Override classes if provided (CRITICAL for validation set consistency)
+        if classes is not None:
+            self.classes = classes
+            # Filter samples to only include those in the provided classes? 
+            # Or just trust that the indices will align?
+            # Better: Re-build class_to_idx based on PROVIDED classes.
+            # And maybe filter samples if they belong to unknown classes (though unlikely if buckets match)
+            
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
         print(f"Found {len(self.samples)} images belonging to {len(self.classes)} classes.")
@@ -146,7 +155,7 @@ import random
 
 class ThreadedGCSDataset(torch.utils.data.IterableDataset):
     def __init__(self, bucket_name: str, prefix: str, transform=None, 
-                 buffer_size: int = 256, num_threads: int = 16, shuffle: bool = False):
+                 buffer_size: int = 256, num_threads: int = 16, shuffle: bool = False, classes: list = None):
         """
         A Threaded IterableDataset that pre-fetches images from GCS using a thread pool.
         This bypasses the need for multiprocessing workers (which crash on Mac/MPS)
@@ -193,6 +202,10 @@ class ThreadedGCSDataset(torch.utils.data.IterableDataset):
             self.samples = temp_ds.samples
             self.classes = temp_ds.classes
             
+        # Override classes if provided
+        if classes is not None:
+            self.classes = classes
+
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         print(f"[Threaded] Initialized with {len(self.samples)} images. Threads={num_threads}")
 
@@ -342,9 +355,13 @@ def get_dataloaders_imagenet(
             print("🚀 Optimizing for WORKERS=0: Using ThreadedGCSDataset for parallel downloads!")
             train_dataset = ThreadedGCSDataset(bucket_name, final_train_prefix, transform=train_t, 
                                                shuffle=True, num_threads=16)
+            
+            # Extract classes from train to ensure consistency
+            train_classes = train_dataset.classes
+            
             # Validation doesn't strictly need shuffling, but threading helps speed
             val_dataset   = ThreadedGCSDataset(bucket_name, final_val_prefix,   transform=val_t, 
-                                               shuffle=False, num_threads=8)
+                                               shuffle=False, num_threads=8, classes=train_classes)
 
             
             # DataLoader for IterableDataset must have shuffle=False (dataset handles it)
@@ -357,7 +374,8 @@ def get_dataloaders_imagenet(
         else:
             # Standard behavior for Linux/CUDA with multiple workers
             train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t)
-            val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t)
+            train_classes = train_dataset.classes
+            val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t, classes=train_classes)
 
         
     else:
@@ -565,7 +583,7 @@ def main():
     LR = 0.1
     MOMENTUM = 0.9
     WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
-    MATCHMAKING_TIME = 15.0
+    MATCHMAKING_TIME = 60.0
     AVERAGING_TIMEOUT = 120.0
     CHECKPOINT_DIR = "./checkpoints"
 
