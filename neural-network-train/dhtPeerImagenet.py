@@ -293,9 +293,9 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     return accuracy
 
 
-def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir: str, epoch_idx: int, acc: float):
+def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir: str, epoch_idx: int, acc: float, filename: str = "best_checkpoint.pt"):
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, "best_checkpoint.pt")
+    path = os.path.join(out_dir, filename)
     torch.save({
         "epoch": epoch_idx,
         "val_accuracy": acc,
@@ -327,7 +327,7 @@ def parse_arguments():
     p.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
                    help="Forzar dispositivo (cpu, cuda o mps). Por defecto: auto-detectar")
     p.add_argument("--use_checkpoint", action="store_true",
-                   help="Cargar checkpoint si existe en ./checkpoints/best_checkpoint.pt")
+                   help="Cargar checkpoint si existe (latest o best)")
     p.add_argument("--initial_peer", type=str, default=None,
                    help="Multiaddr de un peer inicial para bootstrap (opcional en el primer nodo)")
     p.add_argument("--val_every", type=int, default=5,
@@ -416,11 +416,11 @@ def main():
 
     # Modelo ResNet50 (1000 clases)
     # MASTER en CPU (para Hivemind)
-    model = build_model(num_classes=1000, pretrained=True)
+    model = build_model(num_classes=1000, pretrained=False)
     model = model.to("cpu")
 
     # SHADOW en Device (para cómputo MPS/GPU)
-    model_on_device = build_model(num_classes=1000, pretrained=True)
+    model_on_device = build_model(num_classes=1000, pretrained=False)
     model_on_device = model_on_device.to(device)
 
     # channels_last SOLO en CUDA (no en MPS por bug en backward)
@@ -450,9 +450,7 @@ def main():
     # Checkpoint (opcional)
     best_accuracy = -1.0
     start_epoch = 0
-    if args.use_checkpoint:
-        ckpt_path = os.path.join(CHECKPOINT_DIR, "best_checkpoint.pt")
-        start_epoch, best_accuracy = load_checkpoint(ckpt_path, model, base_optimizer, device)
+
 
     # Optimizer de Hivemind
     opt = hivemind.Optimizer(
@@ -467,6 +465,29 @@ def main():
         verbose=True,
         # Si usas GCS, puede que quieras aumentar el timeout si la carga de datos es lenta
     )
+
+    # --- LOAD CHECKPOINT AFTER OPT CREATION ---
+    if args.use_checkpoint:
+        # Intentar cargar latest primero
+        latest_path = os.path.join(CHECKPOINT_DIR, "latest_checkpoint.pt")
+        best_path = os.path.join(CHECKPOINT_DIR, "best_checkpoint.pt")
+        
+        if os.path.exists(latest_path):
+            print(f"Intentando reanudar desde LATEST: {latest_path}")
+            # IMPORTANTE: Pasamos 'opt' (Hivemind Optimizer) en lugar de 'base_optimizer'
+            start_epoch, acc = load_checkpoint(latest_path, model, opt, device)
+            
+            if os.path.exists(best_path):
+                checkpoint = torch.load(best_path, map_location='cpu')
+                best_accuracy = checkpoint.get("val_accuracy", acc)
+            else:
+                best_accuracy = acc
+        elif os.path.exists(best_path):
+            print(f"Intentando reanudar desde BEST: {best_path}")
+            start_epoch, best_accuracy = load_checkpoint(best_path, model, opt, device)
+        else:
+            print("No se encontraron checkpoints para cargar.")
+    # ------------------------------------------
 
     target_epochs = EPOCHS
     last_seen_epoch = getattr(opt, "local_epoch", 0)
@@ -539,13 +560,16 @@ def main():
                             val_acc = evaluate_accuracy(model_on_device, val_loader, device, max_batches=args.val_batches)
                             tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
 
+                            # SIEMPRE guardar el latest checkpoint (usando opt, no base_optimizer)
+                            save_checkpoint(model, opt, CHECKPOINT_DIR, current_epoch, val_acc, filename="latest_checkpoint.pt")
+                            
                             if val_acc > best_accuracy:
-                                ckpt_path = save_checkpoint(model, base_optimizer, CHECKPOINT_DIR, current_epoch, val_acc)
+                                ckpt_path = save_checkpoint(model, opt, CHECKPOINT_DIR, current_epoch, val_acc, filename="best_checkpoint.pt")
                                 best_accuracy = val_acc
                                 checkpoint_path = ckpt_path
                                 tqdm.write(f"↑ Nuevo mejor accuracy ({best_accuracy:.2f}%). Checkpoint guardado: {ckpt_path}")
                             else:
-                                tqdm.write(f"↔ No mejora (best={best_accuracy:.2f}%). No se guarda checkpoint.")
+                                tqdm.write(f"↔ No mejora (best={best_accuracy:.2f}%). Guardado latest_checkpoint.pt.")
 
                         last_seen_epoch = current_epoch
 
