@@ -517,6 +517,8 @@ def parse_arguments():
                    help="No forzar validación en la época 1.")
     p.add_argument("--epochs", type=int, default=10,
                    help="Número total de épocas globales (default: 10).")
+    p.add_argument("--host_port", type=int, default=31337,
+                   help="Puerto TCP para escuchar conexiones entrantes (default: 31337).")
     return p.parse_args()
 
 
@@ -599,7 +601,7 @@ def main():
 
     # DHT
     dht_kwargs = dict(
-        host_maddrs=["/ip4/0.0.0.0/tcp/0"],
+        host_maddrs=[f"/ip4/0.0.0.0/tcp/{args.host_port}"],
         start=True
     )
     if args.initial_peer:
