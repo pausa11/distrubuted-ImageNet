@@ -139,7 +139,7 @@ def parse_arguments():
                    help="Puerto TCP para escuchar conexiones entrantes (default: 31337).")
                    
     # Hyperparameters
-    p.add_argument("--lr", type=float, default=0.1, help="Learning rate (default: 0.1)")
+    p.add_argument("--lr", type=float, default=0.1, help="Learning rate (default: 0.01)")
     p.add_argument("--momentum", type=float, default=0.9, help="Momentum (default: 0.9)")
     p.add_argument("--scheduler_milestones", type=int, nargs='+', default=[30, 60, 90], 
                    help="Milestones for MultiStepLR scheduler (default: 30 60 90)")
