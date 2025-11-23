@@ -563,8 +563,8 @@ def main():
     LR = 1e-3
     MOMENTUM = 0.9
     WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
-    MATCHMAKING_TIME = 1.5
-    AVERAGING_TIMEOUT = 6.0
+    MATCHMAKING_TIME = 5.0
+    AVERAGING_TIMEOUT = 30.0
     CHECKPOINT_DIR = "./checkpoints"
 
     # Device
