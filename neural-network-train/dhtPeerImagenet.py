@@ -640,7 +640,8 @@ def main():
     )
 
     # Scheduler
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(opt, milestones=[30, 60, 90], gamma=0.1)
+    # Scheduler (usamos base_optimizer porque Hivemind Optimizer envuelve los param_groups de forma compleja)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(base_optimizer, milestones=[30, 60, 90], gamma=0.1)
 
     # --- LOAD CHECKPOINT AFTER OPT CREATION ---
     if args.use_checkpoint:
