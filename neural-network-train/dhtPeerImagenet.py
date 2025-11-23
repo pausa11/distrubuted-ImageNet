@@ -30,7 +30,7 @@ from typing import Optional
 #  GCS Dataset
 # =========================
 class GCSImageFolder(Dataset):
-    def __init__(self, bucket_name: str, prefix: str, transform=None, public_access: bool = False):
+    def __init__(self, bucket_name: str, prefix: str, transform=None):
         """
         A Dataset that streams images from a GCS bucket.
         Expects structure: prefix/class_name/image.jpg
@@ -41,7 +41,7 @@ class GCSImageFolder(Dataset):
         self.bucket_name = bucket_name
         self.prefix = prefix.rstrip('/')
         self.transform = transform
-        self.public_access = public_access
+
         
         # Cache logic
         cache_key = hashlib.md5(f"{bucket_name}_{self.prefix}".encode()).hexdigest()
@@ -67,10 +67,8 @@ class GCSImageFolder(Dataset):
         if not loaded_from_cache:
             
             # We need a temporary client just for listing blobs during init (main process)
-            if self.public_access:
-                tmp_client = storage.Client.create_anonymous_client()
-            else:
-                tmp_client = storage.Client()
+            tmp_client = storage.Client.create_anonymous_client()
+
             tmp_bucket = tmp_client.bucket(bucket_name)
             
             print(f"Listing blobs in gs://{bucket_name}/{self.prefix} ... (this may take a while)")
@@ -122,10 +120,8 @@ class GCSImageFolder(Dataset):
         # Lazy initialization of GCS client (per worker process)
         # Lazy initialization of GCS client (per worker process)
         if self.client is None:
-            if self.public_access:
-                self.client = storage.Client.create_anonymous_client()
-            else:
-                self.client = storage.Client()
+            self.client = storage.Client.create_anonymous_client()
+
             self.bucket = self.client.bucket(self.bucket_name)
         
         # Download image bytes
@@ -149,7 +145,7 @@ import queue
 import random
 
 class ThreadedGCSDataset(torch.utils.data.IterableDataset):
-    def __init__(self, bucket_name: str, prefix: str, transform=None, public_access: bool = False, 
+    def __init__(self, bucket_name: str, prefix: str, transform=None, 
                  buffer_size: int = 256, num_threads: int = 16, shuffle: bool = False):
         """
         A Threaded IterableDataset that pre-fetches images from GCS using a thread pool.
@@ -162,7 +158,7 @@ class ThreadedGCSDataset(torch.utils.data.IterableDataset):
         self.bucket_name = bucket_name
         self.prefix = prefix.rstrip('/')
         self.transform = transform
-        self.public_access = public_access
+
         self.buffer_size = buffer_size
         self.num_threads = num_threads
         self.shuffle = shuffle
@@ -192,7 +188,8 @@ class ThreadedGCSDataset(torch.utils.data.IterableDataset):
         if not self.samples:
             # Fallback: use GCSImageFolder logic to discover (lazy way: create one and steal its samples)
             print("[Threaded] Cache missing. performing discovery...")
-            temp_ds = GCSImageFolder(bucket_name, prefix, public_access=public_access)
+            temp_ds = GCSImageFolder(bucket_name, prefix)
+
             self.samples = temp_ds.samples
             self.classes = temp_ds.classes
             
@@ -212,10 +209,8 @@ class ThreadedGCSDataset(torch.utils.data.IterableDataset):
         # Safest is a client per thread.
         
         if not hasattr(self.local, 'client'):
-            if self.public_access:
-                self.local.client = storage.Client.create_anonymous_client()
-            else:
-                self.local.client = storage.Client()
+            self.local.client = storage.Client.create_anonymous_client()
+
             self.local.bucket = self.local.client.bucket(self.bucket_name)
             
         try:
@@ -294,9 +289,9 @@ def get_dataloaders_imagenet(
     device: torch.device,
     bucket_name: Optional[str] = None,
     train_prefix: Optional[str] = None,
-    val_prefix: Optional[str] = None,
-    gcs_public: bool = False
+    val_prefix: Optional[str] = None
 ):
+
     """
     Espera un árbol:
       data_root/
@@ -346,10 +341,11 @@ def get_dataloaders_imagenet(
         if workers == 0:
             print("🚀 Optimizing for WORKERS=0: Using ThreadedGCSDataset for parallel downloads!")
             train_dataset = ThreadedGCSDataset(bucket_name, final_train_prefix, transform=train_t, 
-                                               public_access=gcs_public, shuffle=True, num_threads=16)
+                                               shuffle=True, num_threads=16)
             # Validation doesn't strictly need shuffling, but threading helps speed
             val_dataset   = ThreadedGCSDataset(bucket_name, final_val_prefix,   transform=val_t, 
-                                               public_access=gcs_public, shuffle=False, num_threads=8)
+                                               shuffle=False, num_threads=8)
+
             
             # DataLoader for IterableDataset must have shuffle=False (dataset handles it)
             # and num_workers=0
@@ -360,8 +356,9 @@ def get_dataloaders_imagenet(
             
         else:
             # Standard behavior for Linux/CUDA with multiple workers
-            train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t, public_access=gcs_public)
-            val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t, public_access=gcs_public)
+            train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t)
+            val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t)
+
         
     else:
         train_dir = os.path.join(data_root, "train")
@@ -509,8 +506,7 @@ def parse_arguments():
                    help="Prefijo específico para datos de entrenamiento en GCS (ej: ILSVRC2012_img_train)")
     p.add_argument("--val_prefix", type=str, default=None,
                    help="Prefijo específico para datos de validación en GCS (ej: ILSVRC2012_img_val)")
-    p.add_argument("--gcs_public", action="store_true",
-                   help="Usar acceso anónimo para bucket público (sin credenciales)")
+
     p.add_argument("--batch_size", type=int, default=64,
                    help="Batch size local (por defecto: 64). Reducir si hay OOM.")
     p.add_argument("--target_batch_size", type=int, default=30000,
@@ -581,9 +577,9 @@ def main():
         DATA_ROOT, BATCH, WORKERS, device, 
         bucket_name=args.bucket_name,
         train_prefix=args.train_prefix,
-        val_prefix=args.val_prefix,
-        gcs_public=args.gcs_public
+        val_prefix=args.val_prefix
     )
+
 
     # Modelo ResNet50 (1000 clases)
     # MASTER en CPU (para Hivemind)
