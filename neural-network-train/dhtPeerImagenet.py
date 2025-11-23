@@ -8,6 +8,8 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 import io
+import json
+import hashlib
 
 # Try to import google-cloud-storage
 try:
@@ -41,40 +43,65 @@ class GCSImageFolder(Dataset):
         self.transform = transform
         self.public_access = public_access
         
-        # Do NOT initialize client here to avoid fork-safety issues with multiprocessing
-        self.client = None
-        self.bucket = None
+        # Cache logic
+        cache_key = hashlib.md5(f"{bucket_name}_{self.prefix}".encode()).hexdigest()
+        cache_file = f"gcs_cache_{cache_key}.json"
         
-        # We need a temporary client just for listing blobs during init (main process)
-        # We need a temporary client just for listing blobs during init (main process)
-        if self.public_access:
-            tmp_client = storage.Client.create_anonymous_client()
-        else:
-            tmp_client = storage.Client()
-        tmp_bucket = tmp_client.bucket(bucket_name)
+        loaded_from_cache = False
+        if os.path.exists(cache_file):
+            print(f"Found GCS cache: {cache_file}. Loading...")
+            try:
+                with open(cache_file, 'r') as f:
+                    data = json.load(f)
+                    self.classes = data['classes']
+                    self.samples = data['samples'] # list of [blob_name, class_name]
+                    loaded_from_cache = True
+                    print(f"Loaded {len(self.samples)} images from cache.")
+            except Exception as e:
+                print(f"Failed to load cache: {e}. Will re-list blobs.")
         
-        print(f"Listing blobs in gs://{bucket_name}/{self.prefix} ... (this may take a while)")
-        blobs = list(tmp_bucket.list_blobs(prefix=self.prefix))
-        
-        self.samples = []
-        self.classes = set()
-        
-        # Filter for images and parse classes
-        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-        for blob in tqdm(blobs, desc="Indexing GCS files"):
-            if blob.name.endswith('/'): continue # Skip directories
-            ext = os.path.splitext(blob.name)[1].lower()
-            if ext in valid_extensions:
-                # Structure: prefix/class_name/filename
-                # rel_path: class_name/filename
-                rel_path = blob.name[len(self.prefix)+1:]
-                parts = rel_path.split('/')
-                if len(parts) >= 2:
-                    class_name = parts[0]
-                    self.classes.add(class_name)
-                    self.samples.append((blob.name, class_name))
-        
-        self.classes = sorted(list(self.classes))
+        if not loaded_from_cache:
+            # Do NOT initialize client here to avoid fork-safety issues with multiprocessing
+            self.client = None
+            self.bucket = None
+            
+            # We need a temporary client just for listing blobs during init (main process)
+            if self.public_access:
+                tmp_client = storage.Client.create_anonymous_client()
+            else:
+                tmp_client = storage.Client()
+            tmp_bucket = tmp_client.bucket(bucket_name)
+            
+            print(f"Listing blobs in gs://{bucket_name}/{self.prefix} ... (this may take a while)")
+            blobs = list(tmp_bucket.list_blobs(prefix=self.prefix))
+            
+            self.samples = []
+            self.classes = set()
+            
+            # Filter for images and parse classes
+            valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+            for blob in tqdm(blobs, desc="Indexing GCS files"):
+                if blob.name.endswith('/'): continue # Skip directories
+                ext = os.path.splitext(blob.name)[1].lower()
+                if ext in valid_extensions:
+                    # Structure: prefix/class_name/filename
+                    # rel_path: class_name/filename
+                    rel_path = blob.name[len(self.prefix)+1:]
+                    parts = rel_path.split('/')
+                    if len(parts) >= 2:
+                        class_name = parts[0]
+                        self.classes.add(class_name)
+                        self.samples.append((blob.name, class_name))
+            
+            self.classes = sorted(list(self.classes))
+            
+            # Save to cache
+            print(f"Saving GCS listing to cache: {cache_file}")
+            with open(cache_file, 'w') as f:
+                json.dump({
+                    'classes': self.classes,
+                    'samples': self.samples
+                }, f)
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
         print(f"Found {len(self.samples)} images belonging to {len(self.classes)} classes.")
