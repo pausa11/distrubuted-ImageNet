@@ -7,6 +7,14 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
+import io
+
+# Try to import google-cloud-storage
+try:
+    from google.cloud import storage
+    GCS_AVAILABLE = True
+except ImportError:
+    GCS_AVAILABLE = False
 
 if __name__ == "__main__":
     mp.set_start_method('fork', force=True)
@@ -14,75 +22,109 @@ if __name__ == "__main__":
 import hivemind
 from torchvision.models import resnet50, ResNet50_Weights
 from PIL import Image
-from typing import Tuple, List, Dict, Optional
+from typing import Optional
 
-class TinyImageNetValDataset(Dataset):
-    """
-    Val dataset para el formato original de Tiny-ImageNet-200:
-      root/
-        val/
-          images/
-          val_annotations.txt   (archivo con: <img> <wnid> <x0> <y0> <x1> <y1>)
-      Además, en root/ existe wnids.txt con el listado de las 200 clases (wnid por línea).
-    """
-    def __init__(self, root: str, transform=None):
-        self.root = root
+# =========================
+#  GCS Dataset
+# =========================
+class GCSImageFolder(Dataset):
+    def __init__(self, bucket_name: str, prefix: str, transform=None):
+        """
+        A Dataset that streams images from a GCS bucket.
+        Expects structure: prefix/class_name/image.jpg
+        """
+        if not GCS_AVAILABLE:
+            raise ImportError("google-cloud-storage is required for GCSImageFolder. Run `pip install google-cloud-storage`.")
+        
+        self.bucket_name = bucket_name
+        self.prefix = prefix.rstrip('/')
         self.transform = transform
-
-        # wnids -> idx
-        wnids_path = os.path.join(root, "wnids.txt")
-        with open(wnids_path, "r") as f:
-            wnids = [line.strip() for line in f if line.strip()]
-        self.wnid_to_idx: Dict[str, int] = {wnid: i for i, wnid in enumerate(sorted(wnids))}
-
-        images_dir = os.path.join(root, "val", "images")
-        annot_path = os.path.join(root, "val", "val_annotations.txt")
-
-        self.samples: List[Tuple[str, int]] = []
-        with open(annot_path, "r") as f:
-            for line in f:
-                # formato: filename \t wnid \t x0 \t y0 \t x1 \t y1
-                parts = line.strip().split("\t")
+        
+        # Do NOT initialize client here to avoid fork-safety issues with multiprocessing
+        self.client = None
+        self.bucket = None
+        
+        # We need a temporary client just for listing blobs during init (main process)
+        tmp_client = storage.Client()
+        tmp_bucket = tmp_client.bucket(bucket_name)
+        
+        print(f"Listing blobs in gs://{bucket_name}/{self.prefix} ... (this may take a while)")
+        blobs = list(tmp_bucket.list_blobs(prefix=self.prefix))
+        
+        self.samples = []
+        self.classes = set()
+        
+        # Filter for images and parse classes
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+        for blob in tqdm(blobs, desc="Indexing GCS files"):
+            if blob.name.endswith('/'): continue # Skip directories
+            ext = os.path.splitext(blob.name)[1].lower()
+            if ext in valid_extensions:
+                # Structure: prefix/class_name/filename
+                # rel_path: class_name/filename
+                rel_path = blob.name[len(self.prefix)+1:]
+                parts = rel_path.split('/')
                 if len(parts) >= 2:
-                    filename, wnid = parts[0], parts[1]
-                    img_path = os.path.join(images_dir, filename)
-                    if os.path.isfile(img_path) and wnid in self.wnid_to_idx:
-                        self.samples.append((img_path, self.wnid_to_idx[wnid]))
+                    class_name = parts[0]
+                    self.classes.add(class_name)
+                    self.samples.append((blob.name, class_name))
+        
+        self.classes = sorted(list(self.classes))
+        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
+        
+        print(f"Found {len(self.samples)} images belonging to {len(self.classes)} classes.")
+        if len(self.samples) == 0:
+            msg = (f"⚠️  WARNING: No images found in gs://{bucket_name}/{self.prefix}\n"
+                   f"    Check if the prefix is correct. The script expects: prefix/class_name/image.jpg")
+            print(msg)
+            raise RuntimeError(msg)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        path, target = self.samples[idx]
-        with Image.open(path) as img:
-            img = img.convert("RGB")
+        blob_name, class_name = self.samples[idx]
+        label = self.class_to_idx[class_name]
+        
+        # Lazy initialization of GCS client (per worker process)
+        if self.client is None:
+            self.client = storage.Client()
+            self.bucket = self.client.bucket(self.bucket_name)
+        
+        # Download image bytes
+        blob = self.bucket.blob(blob_name)
+        image_bytes = blob.download_as_bytes()
+        
+        # Load image
+        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        
         if self.transform:
             img = self.transform(img)
-        return img, target
+            
+        return img, label
 
-def build_model(num_classes: int = 200, pretrained: bool = True) -> nn.Module:
-    if pretrained:
-        weights = ResNet50_Weights.IMAGENET1K_V2
-        model = resnet50(weights=weights)
-    else:
-        model = resnet50(weights=None)
-    # Cambiar la capa final a 200 clases
-    in_features = model.fc.in_features
-    model.fc = nn.Linear(in_features, num_classes)
-    return model
-
-def get_dataloaders_tiny_imagenet(
+# =========================
+#  ImageNet-1K Dataloaders
+# =========================
+def get_dataloaders_imagenet(
     data_root: str,
     batch: int,
     workers: int,
-    device: torch.device
+    device: torch.device,
+    bucket_name: Optional[str] = None,
+    train_prefix: Optional[str] = None,
+    val_prefix: Optional[str] = None
 ):
     """
-    Crea loaders de Tiny-ImageNet-200.
-    - Si val está reordenado en subcarpetas por clase: usa ImageFolder.
-    - Si está en formato original (val/images + val_annotations.txt): usa TinyImageNetValDataset.
+    Espera un árbol:
+      data_root/
+        train/0..999/*.JPEG
+        val/0..999/*.JPEG
+    
+    O si bucket_name está definido:
+      gs://bucket_name/train_prefix/...
+      gs://bucket_name/val_prefix/...
     """
-    # ResNet50 espera 224x224 y normalización de ImageNet
     normalize = transforms.Normalize(mean=(0.485, 0.456, 0.406),
                                      std=(0.229, 0.224, 0.225))
 
@@ -99,23 +141,46 @@ def get_dataloaders_tiny_imagenet(
         normalize,
     ])
 
-    # TRAIN siempre es ImageFolder: tiny-imagenet-200/train/<class>/images...
-    train_dir = os.path.join(data_root, "train")
-    train_dataset = datasets.ImageFolder(train_dir, transform=train_t)
-
-    # VAL: detectar si está en subcarpetas por clase
-    val_dir = os.path.join(data_root, "val")
-    val_subdirs = [d for d in os.listdir(val_dir) if os.path.isdir(os.path.join(val_dir, d))]
-    if "images" in val_subdirs:
-        # Formato original → dataset especial
-        val_dataset = TinyImageNetValDataset(root=data_root, transform=val_t)
+    if bucket_name:
+        print(f"Using GCS Bucket: {bucket_name}")
+        
+        # Determine prefixes
+        # If explicit prefix is given, use it.
+        # Otherwise, fall back to data_root/train (or just "train" if data_root is empty/None)
+        
+        if train_prefix:
+            final_train_prefix = train_prefix
+        else:
+            final_train_prefix = os.path.join(data_root, "train") if data_root else "train"
+            
+        if val_prefix:
+            final_val_prefix = val_prefix
+        else:
+            final_val_prefix = os.path.join(data_root, "val") if data_root else "val"
+            
+        print(f"  Train prefix: {final_train_prefix}")
+        print(f"  Val prefix:   {final_val_prefix}")
+        
+        train_dataset = GCSImageFolder(bucket_name, final_train_prefix, transform=train_t)
+        val_dataset   = GCSImageFolder(bucket_name, final_val_prefix,   transform=val_t)
+        
     else:
-        # Ya está reordenado en subcarpetas por clase → ImageFolder
-        val_dataset = datasets.ImageFolder(val_dir, transform=val_t)
+        train_dir = os.path.join(data_root, "train")
+        val_dir   = os.path.join(data_root, "val")
 
-    # pin_memory solo acelera CPU→CUDA, no MPS
+        train_dataset = datasets.ImageFolder(train_dir, transform=train_t)
+        val_dataset   = datasets.ImageFolder(val_dir,   transform=val_t)
+
+    # pin_memory solo ayuda CPU->CUDA; en MPS/CPU no aporta
     pin = (device.type == "cuda")
-    persistent = workers > 0
+    # persistent_workers=True can cause deadlocks/hangs on macOS with GCS/multiprocessing
+    # We disable it to ensure workers are fresh each epoch.
+    persistent = False 
+    prefetch_train = 2 if workers > 0 else None
+
+    val_workers = min(4, workers if workers else 0)
+    prefetch_val = 2 if val_workers > 0 else None
+    persistent_val = False
 
     train_loader = DataLoader(
         train_dataset,
@@ -124,25 +189,40 @@ def get_dataloaders_tiny_imagenet(
         num_workers=workers,
         pin_memory=pin,
         persistent_workers=persistent,
-        prefetch_factor=2 if workers > 0 else None,
+        prefetch_factor=prefetch_train,
         drop_last=False,
     )
-    
-    val_bs = min(64, batch)  # o fija a 32 si quieres ir sobrado
 
     val_loader = DataLoader(
         val_dataset,
         shuffle=False,
-        batch_size=val_bs,
-        num_workers=min(2, workers),
+        batch_size=min(128, batch),
+        num_workers=val_workers,
         pin_memory=pin,
-        persistent_workers=(min(2, workers) > 0),
-        prefetch_factor=2 if min(2, workers) > 0 else None,
+        persistent_workers=persistent_val,
+        prefetch_factor=prefetch_val,
         drop_last=False,
     )
-
     return train_loader, val_loader
 
+
+# =========================
+#  Modelo (1000 clases)
+# =========================
+def build_model(num_classes: int = 1000, pretrained: bool = True) -> nn.Module:
+    if pretrained:
+        weights = ResNet50_Weights.IMAGENET1K_V2
+        model = resnet50(weights=weights)
+    else:
+        model = resnet50(weights=None)
+    in_features = model.fc.in_features
+    model.fc = nn.Linear(in_features, num_classes)
+    return model
+
+
+# =========================
+#  Eval, checkpoints, args
+# =========================
 def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
     model_was_training = model.training
     model.eval()
@@ -150,8 +230,7 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     total = 0
     with torch.no_grad():
         for xb, yb in loader:
-            # Para estabilidad: non_blocking solo CUDA; contiguidad en MPS
-            nb = (device.type == "cuda")
+            nb = (device.type == "cuda")  # non_blocking solo CUDA
             xb = xb.to(device, non_blocking=nb)
             yb = yb.to(device, non_blocking=nb)
             if device.type == "mps":
@@ -166,6 +245,7 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
         model.train()
     return accuracy
 
+
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir: str, epoch_idx: int, acc: float):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "best_checkpoint.pt")
@@ -176,6 +256,7 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, out_dir:
         "opt_state": optimizer.state_dict(),
     }, path)
     return path
+
 
 def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device):
     if not os.path.exists(path):
@@ -193,8 +274,9 @@ def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimize
 
     return epoch, acc
 
+
 def parse_arguments():
-    p = argparse.ArgumentParser(description="Tiny-ImageNet-200 x ResNet50 x Hivemind")
+    p = argparse.ArgumentParser(description="ImageNet-1K x ResNet50 x Hivemind")
     p.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
                    help="Forzar dispositivo (cpu, cuda o mps). Por defecto: auto-detectar")
     p.add_argument("--use_checkpoint", action="store_true",
@@ -203,7 +285,16 @@ def parse_arguments():
                    help="Multiaddr de un peer inicial para bootstrap (opcional en el primer nodo)")
     p.add_argument("--val_every", type=int, default=5,
                    help="Frecuencia de validación (épocas globales). Ej: 5 = validar cada 5.")
+    p.add_argument("--bucket_name", type=str, default=None,
+                   help="Nombre del bucket de GCS para cargar datos (opcional)")
+    p.add_argument("--data_root", type=str, default=None,
+                   help="Ruta base de los datos (local o prefijo en bucket). Si no se especifica, usa ~/data/imagenet-1k")
+    p.add_argument("--train_prefix", type=str, default=None,
+                   help="Prefijo específico para datos de entrenamiento en GCS (ej: ILSVRC2012_img_train)")
+    p.add_argument("--val_prefix", type=str, default=None,
+                   help="Prefijo específico para datos de validación en GCS (ej: ILSVRC2012_img_val)")
     return p.parse_args()
+
 
 def select_device(cli_device: Optional[str]) -> torch.device:
     if cli_device:
@@ -223,17 +314,27 @@ def select_device(cli_device: Optional[str]) -> torch.device:
 
     return torch.device("cpu")
 
+
+# =========================
+#  Main
+# =========================
 def main():
     args = parse_arguments()
 
-    DATA_ROOT = "./data/tiny-imagenet-200"
-    RUN_ID = "tiny_imagenet_resnet50"
-    BATCH = 32
+    # IMPORTANTE: apunta al target_dir que generaste con el unpack:
+    # ~/data/imagenet-1k/{train,val}/0..999
+    if args.data_root:
+        DATA_ROOT = args.data_root
+    else:
+        DATA_ROOT = os.path.expanduser("~/data/imagenet-1k")
+        
+    RUN_ID = "imagenet1k_resnet50"
+    BATCH = 64
     TARGET_GLOBAL_BSZ = 30_000
     EPOCHS = 2
     LR = 1e-3
     MOMENTUM = 0.9
-    WORKERS = 2
+    WORKERS = 4          # En MPS, si notas inestabilidad, prueba WORKERS=0
     MATCHMAKING_TIME = 1.5
     AVERAGING_TIMEOUT = 6.0
     CHECKPOINT_DIR = "./checkpoints"
@@ -247,11 +348,16 @@ def main():
         except Exception:
             pass
 
-    # DataLoaders (Tiny-ImageNet-200)
-    train_loader, val_loader = get_dataloaders_tiny_imagenet(DATA_ROOT, BATCH, WORKERS, device)
+    # DataLoaders (ImageNet-1K)
+    train_loader, val_loader = get_dataloaders_imagenet(
+        DATA_ROOT, BATCH, WORKERS, device, 
+        bucket_name=args.bucket_name,
+        train_prefix=args.train_prefix,
+        val_prefix=args.val_prefix
+    )
 
-    # Modelo ResNet50 (200 clases)
-    model = build_model(num_classes=200, pretrained=True)
+    # Modelo ResNet50 (1000 clases)
+    model = build_model(num_classes=1000, pretrained=True)
 
     # channels_last SOLO en CUDA (no en MPS por bug en backward)
     if device.type == "cuda":
@@ -297,6 +403,7 @@ def main():
         matchmaking_time=MATCHMAKING_TIME,
         averaging_timeout=AVERAGING_TIMEOUT,
         verbose=True,
+        # Si usas GCS, puede que quieras aumentar el timeout si la carga de datos es lenta
     )
 
     target_epochs = EPOCHS
@@ -311,8 +418,7 @@ def main():
         with tqdm(total=None) as pbar:
             while True:
                 for xb, yb in train_loader:
-                    # Para estabilidad: non_blocking solo CUDA; contiguidad en MPS
-                    nb = (device.type == "cuda")
+                    nb = (device.type == "cuda")  # non_blocking solo CUDA
 
                     xb = xb.to(device, non_blocking=nb)
                     yb = yb.to(device, non_blocking=nb)
