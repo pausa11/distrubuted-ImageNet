@@ -1,0 +1,1 @@
+python3 dhtPeerImagenet.py --bucket_name caso-estudio-2 --train_prefix ILSVRC2012_img_train --val_prefix ILSVRC2012_img_val --device mps
