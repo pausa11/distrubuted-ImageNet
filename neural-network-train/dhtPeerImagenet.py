@@ -391,7 +391,7 @@ def main():
     EPOCHS = 2
     LR = 1e-3
     MOMENTUM = 0.9
-    WORKERS = 4          # En MPS, si notas inestabilidad, prueba WORKERS=0
+    WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
     MATCHMAKING_TIME = 1.5
     AVERAGING_TIMEOUT = 6.0
     CHECKPOINT_DIR = "./checkpoints"
@@ -415,13 +415,17 @@ def main():
     )
 
     # Modelo ResNet50 (1000 clases)
+    # MASTER en CPU (para Hivemind)
     model = build_model(num_classes=1000, pretrained=True)
+    model = model.to("cpu")
+
+    # SHADOW en Device (para cómputo MPS/GPU)
+    model_on_device = build_model(num_classes=1000, pretrained=True)
+    model_on_device = model_on_device.to(device)
 
     # channels_last SOLO en CUDA (no en MPS por bug en backward)
     if device.type == "cuda":
-        model = model.to(memory_format=torch.channels_last)
-
-    model = model.to(device)
+        model_on_device = model_on_device.to(memory_format=torch.channels_last)
 
     # Optimizador base
     base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
@@ -486,11 +490,32 @@ def main():
                     elif device.type == "mps":
                         xb = xb.contiguous()
 
-                    opt.zero_grad()
-                    logits = model(xb)
+                    # 1. Sincronizar pesos CPU -> Device
+                    with torch.no_grad():
+                        for p_cpu, p_dev in zip(model.parameters(), model_on_device.parameters()):
+                            p_dev.copy_(p_cpu)
+                        for b_cpu, b_dev in zip(model.buffers(), model_on_device.buffers()):
+                            b_dev.copy_(b_cpu)
+
+                    # 2. Forward/Backward en Device
+                    model_on_device.train()
+                    model_on_device.zero_grad()
+                    
+                    logits = model_on_device(xb)
                     loss = F.cross_entropy(logits, yb)
                     loss.backward()
+
+                    # 3. Sincronizar gradientes Device -> CPU
+                    with torch.no_grad():
+                        for p_cpu, p_dev in zip(model.parameters(), model_on_device.parameters()):
+                            if p_dev.grad is not None:
+                                if p_cpu.grad is None:
+                                    p_cpu.grad = torch.zeros_like(p_cpu)
+                                p_cpu.grad.copy_(p_dev.grad)
+
+                    # 4. Step en CPU (Hivemind)
                     opt.step()
+                    opt.zero_grad()
 
                     pbar.set_description(
                         f"loss={loss.item():.4f}  epoch_g={getattr(opt,'local_epoch',0)}  best={best_accuracy:.2f}%"
@@ -503,7 +528,15 @@ def main():
                         do_eval = force_initial or (current_epoch % args.val_every == 0) or (current_epoch >= target_epochs)
                         if do_eval:
                             tqdm.write(f"Starting validation for epoch {current_epoch} (max_batches={args.val_batches})...")
-                            val_acc = evaluate_accuracy(model, val_loader, device, max_batches=args.val_batches)
+                            
+                            # Sync weights to device before eval to ensure latest state
+                            with torch.no_grad():
+                                for p_cpu, p_dev in zip(model.parameters(), model_on_device.parameters()):
+                                    p_dev.copy_(p_cpu)
+                                for b_cpu, b_dev in zip(model.buffers(), model_on_device.buffers()):
+                                    b_dev.copy_(b_cpu)
+
+                            val_acc = evaluate_accuracy(model_on_device, val_loader, device, max_batches=args.val_batches)
                             tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
 
                             if val_acc > best_accuracy:
