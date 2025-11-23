@@ -122,8 +122,6 @@ def get_dataloaders_imagenet(
     device: torch.device,
     bucket_name: Optional[str] = None,
     train_prefix: Optional[str] = None,
-    bucket_name: Optional[str] = None,
-    train_prefix: Optional[str] = None,
     val_prefix: Optional[str] = None,
     gcs_public: bool = False
 ):
@@ -365,8 +363,6 @@ def main():
     # DataLoaders (ImageNet-1K)
     train_loader, val_loader = get_dataloaders_imagenet(
         DATA_ROOT, BATCH, WORKERS, device, 
-        bucket_name=args.bucket_name,
-        train_prefix=args.train_prefix,
         bucket_name=args.bucket_name,
         train_prefix=args.train_prefix,
         val_prefix=args.val_prefix,
