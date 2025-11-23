@@ -60,10 +60,11 @@ class GCSImageFolder(Dataset):
             except Exception as e:
                 print(f"Failed to load cache: {e}. Will re-list blobs.")
         
+        # Do NOT initialize client here to avoid fork-safety issues with multiprocessing
+        self.client = None
+        self.bucket = None
+
         if not loaded_from_cache:
-            # Do NOT initialize client here to avoid fork-safety issues with multiprocessing
-            self.client = None
-            self.bucket = None
             
             # We need a temporary client just for listing blobs during init (main process)
             if self.public_access:
