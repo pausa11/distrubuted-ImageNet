@@ -5,7 +5,20 @@ set -e
 
 echo "🚀 Setting up environment for WebDataset conversion..."
 
-# 1. Install dependencies
+# 1. Activate Virtual Environment
+if [ -f "../venv/bin/activate" ]; then
+    echo "Activating existing venv (../venv)..."
+    source ../venv/bin/activate
+elif [ -f "venv/bin/activate" ]; then
+    echo "Activating existing venv (./venv)..."
+    source venv/bin/activate
+else
+    echo "Creating new virtual environment..."
+    python3 -m venv venv
+    source venv/bin/activate
+fi
+
+# 2. Install dependencies
 pip install google-cloud-storage webdataset
 
 # 2. Run the conversion script
