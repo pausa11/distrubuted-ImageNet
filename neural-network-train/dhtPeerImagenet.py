@@ -10,6 +10,10 @@ from torchvision.models import resnet50, ResNet50_Weights
 from typing import Optional
 from google.cloud import storage # Import storage globally
 import itertools
+import warnings
+
+# Suppress PyTorch TF32 warning (harmless on Mac/MPS)
+warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32 behavior.*")
 
 # Import from our new module
 from datasets import get_dataloaders_imagenet
@@ -169,6 +173,9 @@ def select_device(cli_device: Optional[str]) -> torch.device:
         return torch.device("mps")
 
     if torch.cuda.is_available():
+        # Configurar TF32 para Ampere+ (solo si hay CUDA)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         return torch.device("cuda")
 
     return torch.device("cpu")
