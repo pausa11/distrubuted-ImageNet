@@ -6,10 +6,10 @@ After=network.target
 # Change this to the user you want to run the script as
 User=abejaminecraft2003
 # Change this to the directory where your code is located
-WorkingDirectory=/home/abejaminecraft2003/distrubuted-ImageNet/neural-network-train/src
+WorkingDirectory=/home/abejaminecraft2003/distrubuted-ImageNet/neural-network-train
 # Adjust the python path and arguments as needed
 # This configuration announces this node as the initial peer to GCS
-ExecStart=/home/abejaminecraft2003/distrubuted-ImageNet/venv/bin/python dhtPeerImagenet.py --announce_gcs_path gs://caso-estudio-2/initial_peer.txt --use_checkpoint --no_initial_val --val_every 10 --use_wds --batch_size 64 
+ExecStart=/home/abejaminecraft2003/distrubuted-ImageNet/venv/bin/python src/dhtPeerImagenet.py --announce_gcs_path gs://caso-estudio-2/initial_peer.txt --use_checkpoint --no_initial_val --val_every 10 --use_wds --batch_size 64 
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
