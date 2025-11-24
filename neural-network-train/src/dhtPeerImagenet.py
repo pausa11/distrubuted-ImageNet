@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", message=".*Please use the new API settings to 
 # Import from our new module
 from datasets import get_webdataset_loader
 from metrics import ResourceMonitor, TrainingLogger
+from tiny_imagenet_classes import TINY_IMAGENET_SYNSETS
 
 if __name__ == "__main__":
     mp.set_start_method('fork', force=True)
@@ -126,6 +127,8 @@ def parse_arguments():
                    help="Frecuencia de validación (épocas globales). Ej: 5 = validar cada 5.")
     p.add_argument("--bucket_name", type=str, default="caso-estudio-2",
                    help="Nombre del bucket de GCS para cargar datos")
+    p.add_argument("--dataset", type=str, default="imagenet", choices=["imagenet", "tiny-imagenet"],
+                   help="Dataset to use: imagenet (1000 classes) or tiny-imagenet (200 classes)")
 
     p.add_argument("--batch_size", type=int, default=64,
                    help="Batch size local (por defecto: 64). Reducir si hay OOM.")
@@ -250,10 +253,59 @@ def main():
             pass
 
     # DataLoaders (ImageNet-1K)
-    print("🚀 Using WebDataset Loader!")
-    # WDS expects: gs://bucket/imagenet-wds/train-{000000..000999}.tar
+    print(f"🚀 Using WebDataset Loader for {args.dataset}!")
     
-    wds_prefix = "imagenet-wds" # Default location from our conversion script
+    if args.dataset == "tiny-imagenet":
+        num_classes = 200
+        wds_prefix = "tiny-imagenet-wds"
+        # For tiny imagenet, we assume local path or bucket path. 
+        # If bucket_name is default, we might need to change it or assume user passes correct one.
+        # But user said "en data tengo el tiny-imagenet-200", so it's likely local.
+        # We should check if bucket_name looks like a GCS bucket or we should use local path.
+        # If user didn't specify bucket, and we are in tiny-imagenet, we might want to default to local 'data' dir?
+        # The user said "en data tengo el tiny-imagenet-200".
+        # Let's assume the user will pass the correct bucket/path or we default to local if it exists?
+        # Actually, let's just use the args.bucket_name. If it's "caso-estudio-2", it might be wrong for local.
+        # But I can't easily change the default based on another arg in argparse without complex logic.
+        # I'll handle it here.
+        
+        # If default bucket and local data exists, prefer local for tiny-imagenet?
+        if args.bucket_name == "caso-estudio-2" and os.path.exists("data/tiny-imagenet-wds"):
+             print("Found local data/tiny-imagenet-wds, using it as bucket_name.")
+             args.bucket_name = os.path.abspath("data")
+             
+        total_shards = 10 # Tiny ImageNet has fewer shards usually. 
+        # Wait, I saw 3 shards in train (0,1,2). So total_shards=3.
+        # And 1 shard in val? I didn't check val count.
+        # Let's check val count quickly or assume small.
+        # The previous ls command for val output 1 file.
+        total_shards = 3 
+        val_shards = 1
+        classes = TINY_IMAGENET_SYNSETS
+        train_prefix_inner = "train/train"
+        val_prefix_inner = "val/val" # Usually val shards are in val/val-XXXX.tar? 
+        # Wait, the ls output for val showed 'val-000000.tar' inside 'val' dir?
+        # The ls output for val was:
+        # {"name":"val-000000.tar","sizeBytes":"..."}
+        # So it is val/val-000000.tar? No, the dir is 'val', and inside is 'val-000000.tar'.
+        # So prefix is 'val', and file is 'val-000000.tar'.
+        # My get_webdataset_loader constructs: {base_url}/{val_prefix}-{00..}.tar
+        # So if base_url is .../tiny-imagenet-wds, and val_prefix is 'val/val', it becomes .../tiny-imagenet-wds/val/val-000000.tar
+        # If the file is directly in val/, then val_prefix should be 'val/val' IF the file is named val-000000.tar?
+        # Wait, if the file is 'val/val-000000.tar', then val_prefix='val/val'.
+        # If the file is 'val/train-000000.tar' (like in imagenet), then val_prefix='val/train'.
+        # Let's assume standard naming 'val-XXXXXX.tar'.
+        val_prefix_inner = "val/val"
+        
+    else:
+        num_classes = 1000
+        wds_prefix = "imagenet-wds"
+        total_shards = args.wds_shards
+        val_shards = 50
+        classes = None # Use default ImageNet
+        train_prefix_inner = "train/train"
+        val_prefix_inner = "val/train"
+
     
     train_loader = get_webdataset_loader(
         bucket_name=args.bucket_name,
@@ -262,8 +314,9 @@ def main():
         num_workers=WORKERS,
         device=device,
         is_train=True,
-        total_shards=args.wds_shards,
-        train_prefix="train/train"
+        total_shards=total_shards,
+        train_prefix=train_prefix_inner,
+        classes=classes
     )
     
     val_loader = get_webdataset_loader(
@@ -273,18 +326,19 @@ def main():
         num_workers=WORKERS, # WDS works fine with workers on Mac usually, or 0
         device=device,
         is_train=False,
-        val_shards=50, # Approximate
-        val_prefix="val/train" # Shards in val folder are named train-XXXXXX.tar 
+        val_shards=val_shards, 
+        val_prefix=val_prefix_inner,
+        classes=classes
     )
 
 
     # Modelo ResNet50 (1000 clases)
     # MASTER en CPU (para Hivemind)
-    model = build_model(num_classes=1000, pretrained=False)
+    model = build_model(num_classes=num_classes, pretrained=False)
     model = model.to("cpu")
 
     # SHADOW en Device (para cómputo MPS/GPU)
-    model_on_device = build_model(num_classes=1000, pretrained=False)
+    model_on_device = build_model(num_classes=num_classes, pretrained=False)
     model_on_device = model_on_device.to(device)
 
     # channels_last SOLO en CUDA (no en MPS por bug en backward)
@@ -465,9 +519,9 @@ def main():
                     yb = yb.to(device, non_blocking=nb)
 
                     # Safety check for labels
-                    if (yb < 0).any() or (yb >= 1000).any():
-                        invalid_vals = yb[(yb < 0) | (yb >= 1000)]
-                        raise RuntimeError(f"Found invalid labels in batch: {invalid_vals.cpu().numpy()}. Expected range [0, 1000).")
+                    if (yb < 0).any() or (yb >= num_classes).any():
+                        invalid_vals = yb[(yb < 0) | (yb >= num_classes)]
+                        raise RuntimeError(f"Found invalid labels in batch: {invalid_vals.cpu().numpy()}. Expected range [0, {num_classes}).")
 
                     if device.type == "cuda":
                         xb = xb.to(memory_format=torch.channels_last)

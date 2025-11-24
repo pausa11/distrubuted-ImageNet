@@ -104,7 +104,8 @@ def get_webdataset_loader(
     total_shards: int = 1000,
     val_shards: int = 50, # Assume validation shards are separate or subset
     train_prefix: str = "train",
-    val_prefix: str = "val"
+    val_prefix: str = "val",
+    classes: Optional[List[str]] = None
 ):
     try:
         import webdataset as wds
@@ -147,7 +148,14 @@ def get_webdataset_loader(
 
     # Construct shard URLs
     # Format: https://storage.googleapis.com/BUCKET/PREFIX/train-{000000..000999}.tar
-    base_url = f"https://storage.googleapis.com/{bucket_name}/{prefix}"
+    if bucket_name.startswith("/") or bucket_name.startswith("file://"):
+        # Local file path
+        if bucket_name.startswith("file://"):
+             bucket_name = bucket_name[7:]
+        base_url = f"file://{bucket_name}/{prefix}"
+    else:
+        # GCS bucket
+        base_url = f"https://storage.googleapis.com/{bucket_name}/{prefix}"
     
     if is_train:
         # e.g. train-000000.tar to train-000999.tar
@@ -216,8 +224,11 @@ def get_webdataset_loader(
     # discover_gcs_files caches results, so it should be fast if already run.
     
     # _, classes = discover_gcs_files(bucket_name, "ILSVRC2012_img_train" if is_train else "ILSVRC2012_img_val")
-    from imagenet_classes import IMAGENET_SYNSETS
-    classes = IMAGENET_SYNSETS
+    # _, classes = discover_gcs_files(bucket_name, "ILSVRC2012_img_train" if is_train else "ILSVRC2012_img_val")
+    if classes is None:
+        from imagenet_classes import IMAGENET_SYNSETS
+        classes = IMAGENET_SYNSETS
+    
     class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
     
     # We need to pass class_to_idx to the worker processes.
