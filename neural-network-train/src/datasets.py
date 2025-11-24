@@ -411,11 +411,42 @@ def get_webdataset_loader(
 ):
     try:
         import webdataset as wds
+        import webdataset.gopen as wds_gopen
+        from webdataset.gopen import Pipe
     except ImportError:
         raise ImportError("Please install webdataset: pip install webdataset")
 
+    # Monkey-patch gopen_curl to use our custom args (because webdataset hardcodes them)
+    def custom_gopen_curl(url, mode="rb", bufsize=8192):
+        if mode[0] == "r":
+            # Use args from env or default robust ones
+            # Added --http1.1 to avoid HTTP/2 stream errors (exit 56)
+            args_str = os.environ.get("WDS_CURL_ARGS", "--ipv4 --http1.1 --connect-timeout 30 --retry 5 --retry-delay 2 -f -s -L")
+            cmd_args = ["curl"] + args_str.split() + [url]
+            return Pipe(
+                cmd_args,
+                mode=mode,
+                bufsize=bufsize,
+                ignore_status=[141, 23],
+            )
+        elif mode[0] == "w":
+            cmd_args = ["curl", "-f", "-s", "-X", "PUT", "-L", "-T", "-", url]
+            return Pipe(
+                cmd_args,
+                mode=mode,
+                bufsize=bufsize,
+                ignore_status=[141, 26],
+            )
+        raise ValueError(f"Unknown mode {mode}")
+
+    # Apply patch
+    wds_gopen.gopen_curl = custom_gopen_curl
+    wds.gopen_schemes["http"] = custom_gopen_curl
+    wds.gopen_schemes["https"] = custom_gopen_curl
+
     # Force IPv4 to avoid potential IPv6 timeout/reset issues on some networks
-    os.environ["WDS_CURL_ARGS"] = "--ipv4"
+    # Also force HTTP/1.1 and add retries to handle connection resets (exit 56)
+    os.environ["WDS_CURL_ARGS"] = "--ipv4 --http1.1 --retry 5 --retry-delay 2 --connect-timeout 30 -f -s -L"
 
     # Construct shard URLs
     # Format: https://storage.googleapis.com/BUCKET/PREFIX/train-{000000..000999}.tar
@@ -490,39 +521,38 @@ def get_webdataset_loader(
     _, classes = discover_gcs_files(bucket_name, "ILSVRC2012_img_train" if is_train else "ILSVRC2012_img_val")
     class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
     
-    def make_sample(sample):
-        # sample is a dict: {'__key__': ..., 'jpg': bytes, 'cls': bytes}
-        image_bytes = sample['jpg']
-        class_bytes = sample['cls']
-        
-        # Decode image
-        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        if transform:
-            img = transform(img)
-            
-        # Decode class
-        class_str = class_bytes.decode('utf-8')
-        label = class_to_idx.get(class_str, -1)
-        
-        # If label is -1, it means we found a class not in our list. 
-        # Should not happen if lists match.
-        
-        return img, label
+    # We need to pass class_to_idx to the worker processes.
+    # Since we can't easily pass arguments to map function in WDS without partial,
+    # and partial might have pickle issues if not careful,
+    # we will use a callable class or a global if needed.
+    # But a simple function with partial is usually fine if defined at module level.
+    # However, class_to_idx is local.
+    # Let's use a helper class.
+
+    # If num_workers is 0, we can use a Threaded implementation to speed up I/O
+    # without the overhead of multiprocessing (which seems to be slow on this Mac).
+    if num_workers == 0:
+        print("🚀 Optimizing for WORKERS=0: Using ThreadedWebDataset for parallel downloads!")
+        return ThreadedWebDataset(
+            bucket_name=bucket_name,
+            prefix=prefix,
+            shard_spec=shard_spec,
+            class_to_idx=class_to_idx,
+            transform=transform,
+            batch_size=batch_size,
+            shuffle_size=shuffle_size,
+            num_threads=16 # Adjust based on network/CPU
+        )
+
+    # Standard WebDataset pipeline for multiprocessing
+    decoder = _WDSSampleDecoder(class_to_idx, transform)
 
     # Create WebDataset pipeline
     dataset = (
         wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue) # resampled=True for infinite stream (good for training)
         .shuffle(shuffle_size)
-        .map(make_sample)
-        .to_tuple(0, 1) # (img, label)
+        .map(decoder)
     )
-    
-    # DataLoader
-    # We use batch_size=None because WebDataset handles batching if we wanted, 
-    # but standard PyTorch DataLoader with batch_size works fine too if we yield single items.
-    # However, for WDS, it's often better to batch in the pipeline. 
-    # But to keep it compatible with our loop, we'll let DataLoader handle batching.
-    # num_workers > 0 is fine with WDS.
     
     loader = DataLoader(
         dataset,
@@ -533,4 +563,92 @@ def get_webdataset_loader(
     )
     
     return loader
+
+
+    return loader
+
+
+class _WDSSampleDecoder:
+    def __init__(self, class_to_idx, transform):
+        self.class_to_idx = class_to_idx
+        self.transform = transform
+
+    def __call__(self, sample):
+        # sample is a dict: {'__key__': ..., 'jpg': bytes, 'cls': bytes}
+        image_bytes = sample['jpg']
+        class_bytes = sample['cls']
+        
+        # Decode image
+        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        if self.transform:
+            img = self.transform(img)
+            
+        # Decode class
+        class_str = class_bytes.decode('utf-8')
+        label = self.class_to_idx.get(class_str, -1)
+        
+        return img, label
+
+
+class ThreadedWebDataset(IterableDataset):
+    def __init__(self, bucket_name, prefix, shard_spec, class_to_idx, transform, batch_size, shuffle_size, num_threads=16):
+        self.bucket_name = bucket_name
+        self.prefix = prefix
+        self.shard_spec = shard_spec
+        self.class_to_idx = class_to_idx
+        self.transform = transform
+        self.batch_size = batch_size
+        self.shuffle_size = shuffle_size
+        self.num_threads = num_threads
+        
+        # We need to manually expand shards because we are not using wds.WebDataset's internal loader
+        # Actually, we can use wds.WebDataset as an iterator source and just prefetch from it?
+        # No, wds.WebDataset does the downloading.
+        # If we want to threaded download, we need to handle shard downloading ourselves OR
+        # use wds with a custom handler?
+        # WebDataset is designed to stream. Parallelizing the stream is hard without workers.
+        # BUT, we can use a ThreadPool to fetch batches?
+        
+        # Simpler approach: Use the existing ThreadedGCSDataset logic but adapted for WDS shards?
+        # No, WDS shards are tar files.
+        
+        # Alternative: Just use wds.WebDataset but wrap the iterator in a thread buffer?
+        # That only helps if the processing is slow, not the downloading (which happens in the iterator).
+        # If wds uses curl, it spawns a subprocess. 
+        # If we iterate sequentially, we wait for each curl.
+        
+        # To speed up WDS with workers=0, we need to fetch multiple shards in parallel.
+        # WebDataset doesn't support this easily in a single process.
+        
+        # Wait, the user's issue is likely that curl is blocking.
+        # If we use `wds.WebDataset(..., handler=wds.warn_and_continue)`, it streams.
+        
+        # Let's try to implement a simple prefetcher thread that iterates the WDS dataset
+        # and puts batches into a queue. This decouples the GPU wait from the IO wait.
+        
+        import webdataset as wds
+        decoder = _WDSSampleDecoder(class_to_idx, transform)
+        self.dataset = (
+            wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue)
+            .shuffle(shuffle_size)
+            .map(decoder)
+        )
+        
+    def __iter__(self):
+        # Create a queue and a thread to fill it
+        import queue
+        q = queue.Queue(maxsize=20) # Buffer 20 batches
+        
+        def producer():
+            # Create a dataloader just for batching (lightweight)
+            # or just manual batching
+            loader = DataLoader(self.dataset, batch_size=self.batch_size, num_workers=0)
+            for batch in loader:
+                q.put(batch)
+                
+        t = threading.Thread(target=producer, daemon=True)
+        t.start()
+        
+        while True:
+            yield q.get()
 

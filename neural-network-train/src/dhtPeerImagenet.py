@@ -11,6 +11,8 @@ from typing import Optional
 from google.cloud import storage # Import storage globally
 import itertools
 import warnings
+import socket
+import glob
 
 # Suppress PyTorch TF32 warning (harmless on Mac/MPS)
 warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32 behavior.*")
@@ -186,6 +188,41 @@ def select_device(cli_device: Optional[str]) -> torch.device:
     return torch.device("cpu")
 
 
+def get_next_log_paths(base_dir="stats"):
+    """
+    Generates unique paths for system and training metrics based on the hostname
+    and an incremental run number.
+    
+    Structure: ./stats/<hostname>/run_<N>_system_metrics.csv
+    """
+    hostname = socket.gethostname()
+    host_dir = os.path.join(base_dir, hostname)
+    os.makedirs(host_dir, exist_ok=True)
+
+    # Find existing runs
+    existing_runs = glob.glob(os.path.join(host_dir, "run_*_system_metrics.csv"))
+    max_run = 0
+    for path in existing_runs:
+        try:
+            # Extract N from .../run_N_system_metrics.csv
+            filename = os.path.basename(path)
+            parts = filename.split('_')
+            # parts[0] is 'run', parts[1] is the number
+            run_num = int(parts[1])
+            if run_num > max_run:
+                max_run = run_num
+        except (IndexError, ValueError):
+            continue
+
+    next_run = max_run + 1
+    
+    sys_metric_path = os.path.join(host_dir, f"run_{next_run}_system_metrics.csv")
+    train_metric_path = os.path.join(host_dir, f"run_{next_run}_training_metrics.csv")
+    
+    print(f"📁 Logging metrics to: {host_dir} (Run #{next_run})")
+    return sys_metric_path, train_metric_path
+
+
 # =========================
 #  Main
 # =========================
@@ -211,9 +248,11 @@ def main():
     CHECKPOINT_DIR = "./checkpoints"
 
     # Initialize Loggers
-    resource_monitor = ResourceMonitor(log_file="system_metrics.csv")
+    sys_log_path, train_log_path = get_next_log_paths()
+    
+    resource_monitor = ResourceMonitor(log_file=sys_log_path)
     resource_monitor.start()
-    training_logger = TrainingLogger(log_file="training_metrics.csv")
+    training_logger = TrainingLogger(log_file=train_log_path)
 
     # Device
     device = select_device(args.device)
@@ -241,7 +280,7 @@ def main():
             device=device,
             is_train=True,
             total_shards=args.wds_shards,
-            train_prefix="train"
+            train_prefix="train/train"
         )
         
         val_loader = get_webdataset_loader(
@@ -252,7 +291,7 @@ def main():
             device=device,
             is_train=False,
             val_shards=50, # Approximate
-            val_prefix="train" # Shards in val folder are named train-XXXXXX.tar 
+            val_prefix="val/train" # Shards in val folder are named train-XXXXXX.tar 
         )
     else:
         train_loader, val_loader = get_dataloaders_imagenet(
