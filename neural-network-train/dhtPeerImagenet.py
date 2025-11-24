@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", message=".*Please use the new API settings to 
 
 # Import from our new module
 from datasets import get_dataloaders_imagenet
+from metrics import ResourceMonitor, TrainingLogger
 
 if __name__ == "__main__":
     mp.set_start_method('fork', force=True)
@@ -204,6 +205,11 @@ def main():
     MATCHMAKING_TIME = 60.0
     AVERAGING_TIMEOUT = 120.0
     CHECKPOINT_DIR = "./checkpoints"
+
+    # Initialize Loggers
+    resource_monitor = ResourceMonitor(log_file="system_metrics.csv")
+    resource_monitor.start()
+    training_logger = TrainingLogger(log_file="training_metrics.csv")
 
     # Device
     device = select_device(args.device)
@@ -431,6 +437,15 @@ def main():
                         f"loss={loss.item():.4f}  epoch_g={getattr(opt,'local_epoch',0)}  best={best_accuracy:.2f}%"
                     )
                     pbar.update()
+                    
+                    # Log training step
+                    current_lr = scheduler.get_last_lr()[0]
+                    training_logger.log_step(
+                        epoch=getattr(opt, "local_epoch", 0),
+                        batch=pbar.n, # approximate batch count
+                        loss=loss.item(),
+                        learning_rate=current_lr
+                    )
 
                     current_epoch = getattr(opt, "local_epoch", last_seen_epoch)
                     if current_epoch != last_seen_epoch:
@@ -448,6 +463,15 @@ def main():
 
                             val_acc = evaluate_accuracy(model_on_device, val_loader, device, max_batches=args.val_batches)
                             tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
+                            
+                            # Log validation accuracy
+                            training_logger.log_step(
+                                epoch=current_epoch,
+                                batch=pbar.n,
+                                loss=loss.item(), # Log last loss
+                                learning_rate=scheduler.get_last_lr()[0],
+                                accuracy=val_acc
+                            )
 
                             # SIEMPRE guardar el latest checkpoint (usando opt, no base_optimizer)
                             save_checkpoint(model, opt, scheduler, CHECKPOINT_DIR, current_epoch, val_acc, filename="latest_checkpoint.pt")
@@ -475,6 +499,8 @@ def main():
             print(f"Mejor checkpoint: {checkpoint_path}")
     else:
         print("\nEntrenamiento finalizado. No se guardaron checkpoints (no hubo mejora).")
+
+    resource_monitor.stop()
 
 if __name__ == "__main__":
     main()
