@@ -8,6 +8,7 @@ from tqdm.auto import tqdm
 import hivemind
 from torchvision.models import resnet50, ResNet50_Weights
 from typing import Optional
+from google.cloud import storage # Import storage globally
 import itertools
 
 # Import from our new module
