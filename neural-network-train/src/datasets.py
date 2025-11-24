@@ -215,7 +215,9 @@ def get_webdataset_loader(
     # If not, fall back to discover_gcs_files but maybe we can optimize it to not list all files?
     # discover_gcs_files caches results, so it should be fast if already run.
     
-    _, classes = discover_gcs_files(bucket_name, "ILSVRC2012_img_train" if is_train else "ILSVRC2012_img_val")
+    # _, classes = discover_gcs_files(bucket_name, "ILSVRC2012_img_train" if is_train else "ILSVRC2012_img_val")
+    from imagenet_classes import IMAGENET_SYNSETS
+    classes = IMAGENET_SYNSETS
     class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
     
     # We need to pass class_to_idx to the worker processes.
