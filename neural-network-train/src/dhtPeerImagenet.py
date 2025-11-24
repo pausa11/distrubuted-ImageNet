@@ -464,6 +464,11 @@ def main():
                     xb = xb.to(device, non_blocking=nb)
                     yb = yb.to(device, non_blocking=nb)
 
+                    # Safety check for labels
+                    if (yb < 0).any() or (yb >= 1000).any():
+                        invalid_vals = yb[(yb < 0) | (yb >= 1000)]
+                        raise RuntimeError(f"Found invalid labels in batch: {invalid_vals.cpu().numpy()}. Expected range [0, 1000).")
+
                     if device.type == "cuda":
                         xb = xb.to(memory_format=torch.channels_last)
                     elif device.type == "mps":

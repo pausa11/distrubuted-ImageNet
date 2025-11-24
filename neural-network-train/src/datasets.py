@@ -281,6 +281,12 @@ class _WDSSampleDecoder:
         class_str = class_bytes.decode('utf-8')
         label = self.class_to_idx.get(class_str, -1)
         
+        if label == -1:
+            # Log the error and maybe return a dummy label to avoid crashing immediately if we want to debug?
+            # But crashing with a clear message is better than a CUDA error.
+            # Let's check if we can find a close match?
+            raise ValueError(f"Unknown class found in WebDataset: '{class_str}'. It was not found in the loaded class list (len={len(self.class_to_idx)}). Check your GCS cache or class mapping.")
+
         return img, label
 
 
