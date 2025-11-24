@@ -392,3 +392,145 @@ def get_dataloaders_imagenet(
         drop_last=False,
     )
     return train_loader, val_loader
+
+# ==========================================
+#  WebDataset Implementation
+# ==========================================
+
+def get_webdataset_loader(
+    bucket_name: str,
+    prefix: str,
+    batch_size: int,
+    num_workers: int,
+    device: torch.device,
+    is_train: bool = True,
+    total_shards: int = 1000,
+    val_shards: int = 50, # Assume validation shards are separate or subset
+    train_prefix: str = "train",
+    val_prefix: str = "val"
+):
+    try:
+        import webdataset as wds
+    except ImportError:
+        raise ImportError("Please install webdataset: pip install webdataset")
+
+    # Force IPv4 to avoid potential IPv6 timeout/reset issues on some networks
+    os.environ["WDS_CURL_ARGS"] = "--ipv4"
+
+    # Construct shard URLs
+    # Format: https://storage.googleapis.com/BUCKET/PREFIX/train-{000000..000999}.tar
+    base_url = f"https://storage.googleapis.com/{bucket_name}/{prefix}"
+    
+    if is_train:
+        # e.g. train-000000.tar to train-000999.tar
+        # We assume shards are named train-XXXXXX.tar
+        # Brace expansion syntax for WebDataset
+        shard_spec = f"{base_url}/{train_prefix}-{{000000..{total_shards-1:06d}}}.tar"
+        shuffle_size = 5000 # Shuffle buffer size
+    else:
+        # e.g. val-000000.tar
+        shard_spec = f"{base_url}/{val_prefix}-{{000000..{val_shards-1:06d}}}.tar"
+        shuffle_size = 0 # No shuffle for val
+
+    print(f"[{'TRAIN' if is_train else 'VAL'}] Loading WebDataset from: {shard_spec}")
+
+    # Transforms
+    normalize = transforms.Normalize(mean=(0.485, 0.456, 0.406),
+                                     std=(0.229, 0.224, 0.225))
+    
+    if is_train:
+        transform = transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=(0.6, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+        ])
+    else:
+        transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+        ])
+
+    # Identity mapping for classes (assuming they are already indices or we handle strings)
+    # The 'cls' field in our WDS is bytes: b"n01440764"
+    # We need to map this to an integer label 0..999.
+    # Ideally, we should load the class_to_idx mapping.
+    # For now, we will create a cached mapping or load it.
+    
+    # HACK: To avoid downloading the mapping every time, we can hardcode or fetch once.
+    # Let's try to fetch classes from a file if it exists, or generate it.
+    # Since we don't have the mapping easily available without listing files, 
+    # we might need the user to provide it or we fetch it from the 'classes.txt' if we saved one.
+    # For this implementation, let's assume we can fetch 'classes.json' from the bucket root or similar.
+    
+    # If we don't have a mapping, we can't train correctly unless the 'cls' in WDS is already an int.
+    # Our conversion script saved 'cls' as the folder name (string ID).
+    # We need the ImageNet synsets list.
+    
+    # Load classes to map string IDs to integers
+    # We reuse discover_gcs_files to get the sorted class list from the original bucket location
+    # This ensures consistency with the pretrained model and previous runs.
+    # We assume the cache exists or we can list quickly.
+    # Note: We use the ORIGINAL prefix (not WDS) to find classes if possible, 
+    # or we can just list the directories in the original prefix.
+    # To avoid re-listing 1.2M files, we hope the cache is there.
+    
+    # If we can't find cache, we might be in trouble for speed.
+    # But let's try to use the cache from the standard dataset.
+    # We'll call discover_gcs_files with the ORIGINAL prefix (passed as argument or inferred).
+    # Actually, we can just pass the original prefix to this function if needed.
+    # For now, let's assume 'train' in the bucket has the classes.
+    
+    # Optimization: Try to load just classes from a 'classes.json' if we uploaded one.
+    # If not, fall back to discover_gcs_files but maybe we can optimize it to not list all files?
+    # discover_gcs_files caches results, so it should be fast if already run.
+    
+    _, classes = discover_gcs_files(bucket_name, "ILSVRC2012_img_train" if is_train else "ILSVRC2012_img_val")
+    class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+    
+    def make_sample(sample):
+        # sample is a dict: {'__key__': ..., 'jpg': bytes, 'cls': bytes}
+        image_bytes = sample['jpg']
+        class_bytes = sample['cls']
+        
+        # Decode image
+        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        if transform:
+            img = transform(img)
+            
+        # Decode class
+        class_str = class_bytes.decode('utf-8')
+        label = class_to_idx.get(class_str, -1)
+        
+        # If label is -1, it means we found a class not in our list. 
+        # Should not happen if lists match.
+        
+        return img, label
+
+    # Create WebDataset pipeline
+    dataset = (
+        wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue) # resampled=True for infinite stream (good for training)
+        .shuffle(shuffle_size)
+        .map(make_sample)
+        .to_tuple(0, 1) # (img, label)
+    )
+    
+    # DataLoader
+    # We use batch_size=None because WebDataset handles batching if we wanted, 
+    # but standard PyTorch DataLoader with batch_size works fine too if we yield single items.
+    # However, for WDS, it's often better to batch in the pipeline. 
+    # But to keep it compatible with our loop, we'll let DataLoader handle batching.
+    # num_workers > 0 is fine with WDS.
+    
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+        prefetch_factor=2 if num_workers > 0 else None
+    )
+    
+    return loader
+

@@ -16,7 +16,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32 behavior.*")
 
 # Import from our new module
-from datasets import get_dataloaders_imagenet
+from datasets import get_dataloaders_imagenet, get_webdataset_loader
 from metrics import ResourceMonitor, TrainingLogger
 
 if __name__ == "__main__":
@@ -157,6 +157,10 @@ def parse_arguments():
     p.add_argument("--fetch_gcs_path", type=str, default=None,
                    help="GCS path to read the initial peer address from. For Worker Peers.")
 
+    # WebDataset
+    p.add_argument("--use_wds", action="store_true", help="Use WebDataset format for training (requires conversion first).")
+    p.add_argument("--wds_shards", type=int, default=641, help="Total number of WebDataset shards (default: 641).")
+
     return p.parse_args()
 
 
@@ -221,12 +225,42 @@ def main():
             pass
 
     # DataLoaders (ImageNet-1K)
-    train_loader, val_loader = get_dataloaders_imagenet(
-        DATA_ROOT, BATCH, WORKERS, device, 
-        bucket_name=args.bucket_name,
-        train_prefix=args.train_prefix,
-        val_prefix=args.val_prefix
-    )
+    if args.use_wds:
+        print("🚀 Using WebDataset Loader!")
+        # WDS expects: gs://bucket/imagenet-wds/train-{000000..000999}.tar
+        # We assume args.data_root or args.train_prefix points to the folder containing shards
+        # If args.data_root is not set, we default to 'imagenet-wds' in the bucket
+        
+        wds_prefix = "imagenet-wds" # Default location from our conversion script
+        
+        train_loader = get_webdataset_loader(
+            bucket_name=args.bucket_name,
+            prefix=wds_prefix,
+            batch_size=BATCH,
+            num_workers=WORKERS,
+            device=device,
+            is_train=True,
+            total_shards=args.wds_shards,
+            train_prefix="train"
+        )
+        
+        val_loader = get_webdataset_loader(
+            bucket_name=args.bucket_name,
+            prefix=wds_prefix,
+            batch_size=min(128, BATCH),
+            num_workers=WORKERS, # WDS works fine with workers on Mac usually, or 0
+            device=device,
+            is_train=False,
+            val_shards=50, # Approximate
+            val_prefix="train" # Shards in val folder are named train-XXXXXX.tar 
+        )
+    else:
+        train_loader, val_loader = get_dataloaders_imagenet(
+            DATA_ROOT, BATCH, WORKERS, device, 
+            bucket_name=args.bucket_name,
+            train_prefix=args.train_prefix,
+            val_prefix=args.val_prefix
+        )
 
 
     # Modelo ResNet50 (1000 clases)
