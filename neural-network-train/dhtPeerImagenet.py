@@ -257,16 +257,30 @@ def main():
             bucket_name = parts[0]
             blob_name = parts[1]
             
-            storage_client = storage.Client.create_anonymous_client()
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
+            # Use requests with timestamp to bypass GCS cache
+            import time
+            import requests
+            public_url = f"https://storage.googleapis.com/{bucket_name}/{blob_name}?t={int(time.time())}"
             
-            content = blob.download_as_text().strip()
-            if content:
+            print(f"   Trying public URL: {public_url}")
+            resp = requests.get(public_url, timeout=10)
+            
+            if resp.status_code == 200:
+                content = resp.text.strip()
                 print(f"✅ Found initial peer: {content}")
                 args.initial_peer = content
             else:
-                print("⚠️  GCS file found but empty.")
+                print(f"⚠️  Could not fetch from public URL (status {resp.status_code}). Trying GCS client...")
+                # Fallback to GCS client
+                storage_client = storage.Client.create_anonymous_client()
+                bucket = storage_client.bucket(bucket_name)
+                blob = bucket.blob(blob_name)
+                content = blob.download_as_text().strip()
+                if content:
+                    print(f"✅ Found initial peer (via Client): {content}")
+                    args.initial_peer = content
+                else:
+                    print("⚠️  GCS file found but empty.")
         except Exception as e:
             print(f"⚠️  Failed to fetch initial peer from GCS: {e}")
             print("   Will attempt to start without initial peer (or as standalone).")
