@@ -261,13 +261,22 @@ def main():
     # DHT
     dht_kwargs = dict(
         host_maddrs=[f"/ip4/0.0.0.0/tcp/{args.host_port}"],
-        start=True
+        start=True,
+        await_ready=False  # Don't wait in __init__, we will wait manually
     )
     if args.initial_peer:
         dht_kwargs["initial_peers"] = [args.initial_peer]
 
     print(f"=== Hivemind DHT ===")
     dht = hivemind.DHT(**dht_kwargs)
+    
+    # Wait for DHT to be ready (with longer timeout than default 15s)
+    print("⏳ Waiting for DHT to be ready...")
+    try:
+        dht.wait_until_ready(timeout=60.0)
+        print("✅ DHT is ready!")
+    except TimeoutError:
+        print("⚠️  DHT timed out waiting for readiness. Continuing anyway (might fail later)...")
     
     # --- AUTOMATED DISCOVERY: ANNOUNCE ---
     if args.announce_gcs_path:
