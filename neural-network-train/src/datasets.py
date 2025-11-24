@@ -248,7 +248,7 @@ def get_webdataset_loader(
 
     # Create WebDataset pipeline
     dataset = (
-        wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue) # resampled=True for infinite stream (good for training)
+        wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue, shardshuffle=False) # resampled=True for infinite stream (good for training)
         .shuffle(shuffle_size)
         .map(decoder)
     )
@@ -331,7 +331,7 @@ class ThreadedWebDataset(IterableDataset):
         import webdataset as wds
         decoder = _WDSSampleDecoder(class_to_idx, transform)
         self.dataset = (
-            wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue)
+            wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue, shardshuffle=False)
             .shuffle(shuffle_size)
             .map(decoder)
         )
