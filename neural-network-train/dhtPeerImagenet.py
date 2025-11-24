@@ -145,6 +145,12 @@ def parse_arguments():
                    help="Milestones for MultiStepLR scheduler (default: 30 60 90)")
     p.add_argument("--scheduler_gamma", type=float, default=0.1, help="Gamma for scheduler (default: 0.1)")
 
+    # Automated Peer Discovery
+    p.add_argument("--announce_gcs_path", type=str, default=None,
+                   help="GCS path to write this peer's address to (e.g. gs://bucket/peer.txt). For the Initial Peer.")
+    p.add_argument("--fetch_gcs_path", type=str, default=None,
+                   help="GCS path to read the initial peer address from. For Worker Peers.")
+
     return p.parse_args()
 
 
@@ -225,6 +231,32 @@ def main():
     # Optimizador base
     base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM, weight_decay=1e-4)
 
+    # --- AUTOMATED DISCOVERY: FETCH ---
+    if args.fetch_gcs_path and not args.initial_peer:
+        print(f"🔍 Looking for initial peer address in {args.fetch_gcs_path}...")
+        try:
+            # Parse bucket and blob
+            if not args.fetch_gcs_path.startswith("gs://"):
+                raise ValueError("GCS path must start with gs://")
+            
+            parts = args.fetch_gcs_path[5:].split('/', 1)
+            bucket_name = parts[0]
+            blob_name = parts[1]
+            
+            storage_client = storage.Client.create_anonymous_client()
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            
+            content = blob.download_as_text().strip()
+            if content:
+                print(f"✅ Found initial peer: {content}")
+                args.initial_peer = content
+            else:
+                print("⚠️  GCS file found but empty.")
+        except Exception as e:
+            print(f"⚠️  Failed to fetch initial peer from GCS: {e}")
+            print("   Will attempt to start without initial peer (or as standalone).")
+
     # DHT
     dht_kwargs = dict(
         host_maddrs=[f"/ip4/0.0.0.0/tcp/{args.host_port}"],
@@ -232,15 +264,56 @@ def main():
     )
     if args.initial_peer:
         dht_kwargs["initial_peers"] = [args.initial_peer]
-    dht = hivemind.DHT(**dht_kwargs)
 
+    print(f"=== Hivemind DHT ===")
+    dht = hivemind.DHT(**dht_kwargs)
+    
+    # --- AUTOMATED DISCOVERY: ANNOUNCE ---
+    if args.announce_gcs_path:
+        print(f"📢 Announcing this peer to {args.announce_gcs_path}...")
+        try:
+            # 1. Get Public IP
+            import requests
+            try:
+                public_ip = requests.get('https://checkip.amazonaws.com', timeout=5).text.strip()
+            except:
+                public_ip = "127.0.0.1" # Fallback
+                
+            # 2. Construct Multiaddr
+            # /ip4/PUBLIC_IP/tcp/PORT/p2p/PEER_ID
+            peer_id = dht.peer_id
+            port = args.host_port
+            full_address = f"/ip4/{public_ip}/tcp/{port}/p2p/{peer_id}"
+            
+            print(f"   Public Address: {full_address}")
+            
+            # 3. Write to GCS
+            if not args.announce_gcs_path.startswith("gs://"):
+                raise ValueError("GCS path must start with gs://")
+                
+            parts = args.announce_gcs_path[5:].split('/', 1)
+            bucket_name = parts[0]
+            blob_name = parts[1]
+            
+            # Note: Writing requires credentials (not anonymous). 
+            # The VM should have Service Account attached.
+            storage_client = storage.Client() 
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            
+            blob.upload_from_string(full_address)
+            print(f"✅ Address written to GCS successfully.")
+            
+        except Exception as e:
+            print(f"❌ Failed to announce address to GCS: {e}")
+
+    # Mostrar info
     maddrs = [str(m) for m in dht.get_visible_maddrs()]
     print("\n=== Hivemind DHT ===")
     for m in maddrs:
         print("VISIBLE_MADDR:", m)
     if not args.initial_peer:
         print("\n⚠️  Usa una dirección que NO sea 127.0.0.1 como --initial_peer")
-        print("    Busca la que tenga tu IP local (192.168.x.x o 10.0.x.x)")
 
     # Checkpoint (opcional)
     best_accuracy = -1.0
