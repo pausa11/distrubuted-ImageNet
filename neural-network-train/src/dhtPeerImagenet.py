@@ -125,12 +125,12 @@ def parse_arguments():
     p.add_argument("--val_every", type=int, default=5,
                    help="Frecuencia de validación (épocas globales). Ej: 5 = validar cada 5.")
     p.add_argument("--bucket_name", type=str, default="caso-estudio-2",
-                   help="Nombre del bucket de GCS para cargar datos (opcional)")
+                   help="Nombre del bucket de GCS para cargar datos")
 
     p.add_argument("--batch_size", type=int, default=64,
                    help="Batch size local (por defecto: 64). Reducir si hay OOM.")
-    p.add_argument("--target_batch_size", type=int, default=30000,
-                   help="Batch size global objetivo para Hivemind (por defecto: 30000).")
+    p.add_argument("--target_batch_size", type=int, default=16384,
+                   help="Batch size global objetivo para Hivemind (por defecto: 16384).")
     p.add_argument("--val_batches", type=int, default=100,
                    help="Número máximo de batches para validar (default: 100). None para validar todo.")
     p.add_argument("--no_initial_val", action="store_true",
@@ -141,10 +141,10 @@ def parse_arguments():
                    help="Puerto TCP para escuchar conexiones entrantes (default: 31337).")
                    
     # Hyperparameters
-    p.add_argument("--lr", type=float, default=0.1, help="Learning rate (default: 0.01)")
+    p.add_argument("--lr", type=float, default=0.05, help="Learning rate (default: 0.05)")
     p.add_argument("--momentum", type=float, default=0.9, help="Momentum (default: 0.9)")
-    p.add_argument("--scheduler_milestones", type=int, nargs='+', default=[30, 60, 90], 
-                   help="Milestones for MultiStepLR scheduler (default: 30 60 90)")
+    p.add_argument("--scheduler_milestones", type=int, nargs='+', default=[1000, 1600, 1800], 
+                   help="Milestones for MultiStepLR scheduler (default: 1000 1600 1800)")
     p.add_argument("--scheduler_gamma", type=float, default=0.1, help="Gamma for scheduler (default: 0.1)")
 
     # Automated Peer Discovery
