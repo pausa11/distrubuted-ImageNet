@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", message=".*Please use the new API settings to 
 if __name__ == "__main__":
     mp.set_start_method('fork', force=True)
 
-def build_model(num_classes: int = 200) -> nn.Module:
+def build_model(num_classes: int = 1000) -> nn.Module:
     model = resnet50(weights=None)
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, num_classes)
@@ -183,8 +183,8 @@ def parse_arguments():
                    help="Frecuencia de validación (épocas globales). Ej: 5 = validar cada 5.")
     
     # Data loading
-    p.add_argument("--data_dir", type=str, default="data/tiny-imagenet-200",
-                   help="Path to tiny-imagenet-200 directory (default: data/tiny-imagenet-200)")
+    p.add_argument("--data_dir", type=str, default="gs://caso-estudio-2/imagenet-wds",
+                   help="Path to WebDataset directory (default: gs://caso-estudio-2/imagenet-wds)")
     p.add_argument("--num_workers", type=int, default=0,
                    help="Number of data loading workers (default: 0 for MPS compatibility)")
 
@@ -299,19 +299,49 @@ def main():
         except Exception:
             pass
 
-    # DataLoaders (Tiny-ImageNet with ImageFolder)
-    print(f"🚀 Loading Tiny-ImageNet from {args.data_dir}")
+    # DataLoaders (WebDataset)
+    print(f"🚀 Loading ImageNet from {args.data_dir} (WebDataset)")
     
-    num_classes = 200  # Tiny-ImageNet has 200 classes
-    WORKERS = args.num_workers  # Use from args instead of hardcoded
+    # Load ImageNet classes
+    try:
+        from imagenet_classes import IMAGENET_SYNSETS
+        classes = IMAGENET_SYNSETS
+        num_classes = len(classes)
+        print(f"Loaded {num_classes} classes from imagenet_classes.py")
+    except ImportError:
+        print("⚠️  Could not import imagenet_classes.py. Defaulting to 1000 classes (ImageNet-1k standard) but labels might be wrong if dataset is subset.")
+        num_classes = 1000
+        classes = None
+
+    WORKERS = args.num_workers
     
-    train_loader, val_loader = get_data_loaders(
-        args.data_dir,
+    from datasets import get_webdataset_loader
+    
+    # Train Loader
+    train_loader = get_webdataset_loader(
+        bucket_name=args.data_dir,
+        prefix="", # Path is full GCS path
         batch_size=BATCH,
-        num_workers=WORKERS
+        num_workers=WORKERS,
+        device=device,
+        is_train=True,
+        total_shards=641, # Found 641 shards in imagenet-wds/train
+        train_prefix="train/train",
+        classes=classes
     )
-
-
+    
+    # Val Loader
+    val_loader = get_webdataset_loader(
+        bucket_name=args.data_dir,
+        prefix="",
+        batch_size=BATCH,
+        num_workers=WORKERS,
+        device=device,
+        is_train=False,
+        val_shards=50, # Found 50 shards in imagenet-wds/val
+        val_prefix="val/train",
+        classes=classes
+    )
     # Modelo ResNet50 (1000 clases)
     # MASTER en CPU (para Hivemind)
     model = build_model(num_classes=num_classes)

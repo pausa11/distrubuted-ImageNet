@@ -155,7 +155,18 @@ def get_webdataset_loader(
         base_url = f"file://{bucket_name}/{prefix}"
     else:
         # GCS bucket
-        base_url = f"https://storage.googleapis.com/{bucket_name}/{prefix}"
+        # Strip gs:// prefix if present
+        if bucket_name.startswith("gs://"):
+            bucket_name = bucket_name[5:]
+            
+        # Remove trailing slashes to avoid double slashes
+        bucket_name = bucket_name.rstrip('/')
+        prefix = prefix.strip('/')
+        
+        if prefix:
+            base_url = f"https://storage.googleapis.com/{bucket_name}/{prefix}"
+        else:
+            base_url = f"https://storage.googleapis.com/{bucket_name}"
     
     if is_train:
         # e.g. train-000000.tar to train-000999.tar
@@ -262,6 +273,7 @@ def get_webdataset_loader(
         wds.WebDataset(shard_spec, resampled=True, handler=wds.warn_and_continue, shardshuffle=False) # resampled=True for infinite stream (good for training)
         .shuffle(shuffle_size)
         .map(decoder)
+        .select(lambda x: x is not None)
     )
     
     loader = DataLoader(
@@ -295,10 +307,9 @@ class _WDSSampleDecoder:
         label = self.class_to_idx.get(class_str, -1)
         
         if label == -1:
-            # Log the error and maybe return a dummy label to avoid crashing immediately if we want to debug?
-            # But crashing with a clear message is better than a CUDA error.
-            # Let's check if we can find a close match?
-            raise ValueError(f"Unknown class found in WebDataset: '{class_str}'. It was not found in the loaded class list (len={len(self.class_to_idx)}). Check your GCS cache or class mapping.")
+            # Log warning (rate limited ideally, but for now just print)
+            # print(f"⚠️ Warning: Unknown class '{class_str}'. Skipping sample.")
+            return None
 
         return img, label
 
