@@ -7,47 +7,98 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm
 import hivemind
 from torchvision.models import resnet50, ResNet50_Weights
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
 from typing import Optional
-from google.cloud import storage # Import storage globally
 import itertools
 import warnings
 import socket
 import glob
-
-# Suppress PyTorch TF32 warning (harmless on Mac/MPS)
-warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32 behavior.*")
-
-# Import from our new module
-from datasets import get_webdataset_loader
 from metrics import ResourceMonitor, TrainingLogger
-from tiny_imagenet_classes import TINY_IMAGENET_SYNSETS
+
+warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32 behavior.*")
 
 if __name__ == "__main__":
     mp.set_start_method('fork', force=True)
 
-# =========================
-#  Modelo (1000 clases)
-# =========================
-def build_model(num_classes: int = 1000, pretrained: bool = True) -> nn.Module:
-    if pretrained:
-        weights = ResNet50_Weights.IMAGENET1K_V2
-        model = resnet50(weights=weights)
-    else:
-        model = resnet50(weights=None)
+def build_model(num_classes: int = 200) -> nn.Module:
+    model = resnet50(weights=None)
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, num_classes)
     return model
 
+def get_data_loaders(data_dir, batch_size=64, num_workers=0):
+    """
+    Create data loaders for Tiny-ImageNet using ImageFolder.
+    
+    Args:
+        data_dir: Path to tiny-imagenet-200 directory
+        batch_size: Batch size
+        num_workers: Number of data loading workers
+    
+    Returns:
+        train_loader, val_loader
+    """
+    
+    # Training transforms (with augmentation)
+    train_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.RandomCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    
+    # Validation transforms (no augmentation)
+    val_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    
+    # Training dataset
+    train_dir = os.path.join(data_dir, 'train')
+    train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    # Validation dataset
+    val_dir = os.path.join(data_dir, 'val')
+    val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    print(f"Training samples: {len(train_dataset)}")
+    print(f"Validation samples: {len(val_dataset)}")
+    print(f"Number of classes: {len(train_dataset.classes)}")
+    
+    return train_loader, val_loader
 
-# =========================
-#  Eval, checkpoints, args
-# =========================
-
-def evaluate_accuracy(model: nn.Module, loader, device: torch.device, max_batches: Optional[int] = None) -> float:
+def evaluate_accuracy(model: nn.Module, loader, device: torch.device, max_batches: Optional[int] = None) -> tuple:
+    """
+    Evaluate model on validation data.
+    
+    Returns:
+        tuple: (average_loss, accuracy_percentage)
+    """
     model_was_training = model.training
     model.eval()
     correct = 0
     total = 0
+    running_loss = 0.0
+    num_batches = 0
+    
     with torch.no_grad():
         # Limit validation to max_batches if specified
         if max_batches is not None:
@@ -73,14 +124,22 @@ def evaluate_accuracy(model: nn.Module, loader, device: torch.device, max_batche
                 xb = xb.contiguous()
 
             logits = model(xb)
+            loss = F.cross_entropy(logits, yb)
+            
+            running_loss += loss.item()
+            num_batches += 1
+            
             pred = logits.argmax(dim=1)
             correct += (pred == yb).sum().item()
             total += yb.size(0)
+    
+    avg_loss = running_loss / max(1, num_batches)
     accuracy = 100.0 * correct / max(1, total)
+    
     if model_was_training:
         model.train()
-    return accuracy
-
+    
+    return avg_loss, accuracy
 
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, scheduler, out_dir: str, epoch_idx: int, acc: float, filename: str = "best_checkpoint.pt"):
     os.makedirs(out_dir, exist_ok=True)
@@ -93,7 +152,6 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, schedule
         "scheduler_state": scheduler.state_dict() if scheduler else None,
     }, path)
     return path
-
 
 def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimizer, scheduler, device: torch.device):
     if not os.path.exists(path):
@@ -114,27 +172,28 @@ def load_checkpoint(path: str, model: nn.Module, optimizer: torch.optim.Optimize
 
     return epoch, acc
 
-
 def parse_arguments():
-    p = argparse.ArgumentParser(description="ImageNet-1K x ResNet50 x Hivemind")
+    p = argparse.ArgumentParser(description="Tiny-ImageNet x ResNet50 x Hivemind")
     p.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
                    help="Forzar dispositivo (cpu, cuda o mps). Por defecto: auto-detectar")
     p.add_argument("--use_checkpoint", action="store_true",
                    help="Cargar checkpoint si existe (latest o best)")
     p.add_argument("--initial_peer", type=str, default=None,
                    help="Multiaddr de un peer inicial para bootstrap (opcional en el primer nodo)")
-    p.add_argument("--val_every", type=int, default=5,
+    p.add_argument("--val_every", type=int, default=1,
                    help="Frecuencia de validación (épocas globales). Ej: 5 = validar cada 5.")
-    p.add_argument("--bucket_name", type=str, default="caso-estudio-2",
-                   help="Nombre del bucket de GCS para cargar datos")
-    p.add_argument("--dataset", type=str, default="imagenet", choices=["imagenet", "tiny-imagenet"],
-                   help="Dataset to use: imagenet (1000 classes) or tiny-imagenet (200 classes)")
+    
+    # Data loading
+    p.add_argument("--data_dir", type=str, default="data/tiny-imagenet-200",
+                   help="Path to tiny-imagenet-200 directory (default: data/tiny-imagenet-200)")
+    p.add_argument("--num_workers", type=int, default=0,
+                   help="Number of data loading workers (default: 0 for MPS compatibility)")
 
     p.add_argument("--batch_size", type=int, default=64,
                    help="Batch size local (por defecto: 64). Reducir si hay OOM.")
-    p.add_argument("--target_batch_size", type=int, default=16384,
+    p.add_argument("--target_batch_size", type=int, default=100000,
                    help="Batch size global objetivo para Hivemind (por defecto: 16384).")
-    p.add_argument("--val_batches", type=int, default=100,
+    p.add_argument("--val_batches", type=int, default=None,
                    help="Número máximo de batches para validar (default: 100). None para validar todo.")
     p.add_argument("--no_initial_val", action="store_true",
                    help="No forzar validación en la época 1.")
@@ -144,8 +203,7 @@ def parse_arguments():
                    help="Puerto TCP para escuchar conexiones entrantes (default: 31337).")
                    
     # Hyperparameters
-    p.add_argument("--lr", type=float, default=0.05, help="Learning rate (default: 0.05)")
-    p.add_argument("--momentum", type=float, default=0.9, help="Momentum (default: 0.9)")
+    p.add_argument("--lr", type=float, default=0.001, help="Learning rate (default: 0.05)")
     p.add_argument("--scheduler_milestones", type=int, nargs='+', default=[1000, 1600, 1800], 
                    help="Milestones for MultiStepLR scheduler (default: 1000 1600 1800)")
     p.add_argument("--scheduler_gamma", type=float, default=0.1, help="Gamma for scheduler (default: 0.1)")
@@ -156,11 +214,7 @@ def parse_arguments():
     p.add_argument("--fetch_gcs_path", type=str, default=None,
                    help="GCS path to read the initial peer address from. For Worker Peers.")
 
-    # WebDataset
-    p.add_argument("--wds_shards", type=int, default=641, help="Total number of WebDataset shards (default: 641).")
-
     return p.parse_args()
-
 
 def select_device(cli_device: Optional[str]) -> torch.device:
     if cli_device:
@@ -182,7 +236,6 @@ def select_device(cli_device: Optional[str]) -> torch.device:
         return torch.device("cuda")
 
     return torch.device("cpu")
-
 
 def get_next_log_paths(base_dir="stats"):
     """
@@ -218,19 +271,14 @@ def get_next_log_paths(base_dir="stats"):
     print(f"📁 Logging metrics to: {host_dir} (Run #{next_run})")
     return sys_metric_path, train_metric_path
 
-
-# =========================
-#  Main
-# =========================
 def main():
     args = parse_arguments()
 
-    RUN_ID = "imagenet1k_resnet50"
+    RUN_ID = "tinyimagenet_resnet50"
     BATCH = args.batch_size
     TARGET_GLOBAL_BSZ = args.target_batch_size
     EPOCHS = args.epochs
     LR = args.lr
-    MOMENTUM = args.momentum
     WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
     MATCHMAKING_TIME = 60.0
     AVERAGING_TIMEOUT = 120.0
@@ -252,93 +300,26 @@ def main():
         except Exception:
             pass
 
-    # DataLoaders (ImageNet-1K)
-    print(f"🚀 Using WebDataset Loader for {args.dataset}!")
+    # DataLoaders (Tiny-ImageNet with ImageFolder)
+    print(f"🚀 Loading Tiny-ImageNet from {args.data_dir}")
     
-    if args.dataset == "tiny-imagenet":
-        num_classes = 200
-        wds_prefix = "tiny-imagenet-wds"
-        # For tiny imagenet, we assume local path or bucket path. 
-        # If bucket_name is default, we might need to change it or assume user passes correct one.
-        # But user said "en data tengo el tiny-imagenet-200", so it's likely local.
-        # We should check if bucket_name looks like a GCS bucket or we should use local path.
-        # If user didn't specify bucket, and we are in tiny-imagenet, we might want to default to local 'data' dir?
-        # The user said "en data tengo el tiny-imagenet-200".
-        # Let's assume the user will pass the correct bucket/path or we default to local if it exists?
-        # Actually, let's just use the args.bucket_name. If it's "caso-estudio-2", it might be wrong for local.
-        # But I can't easily change the default based on another arg in argparse without complex logic.
-        # I'll handle it here.
-        
-        # If default bucket and local data exists, prefer local for tiny-imagenet?
-        if args.bucket_name == "caso-estudio-2" and os.path.exists("data/tiny-imagenet-wds"):
-             print("Found local data/tiny-imagenet-wds, using it as bucket_name.")
-             args.bucket_name = os.path.abspath("data")
-             
-        total_shards = 10 # Tiny ImageNet has fewer shards usually. 
-        # Wait, I saw 3 shards in train (0,1,2). So total_shards=3.
-        # And 1 shard in val? I didn't check val count.
-        # Let's check val count quickly or assume small.
-        # The previous ls command for val output 1 file.
-        total_shards = 3 
-        val_shards = 1
-        classes = TINY_IMAGENET_SYNSETS
-        train_prefix_inner = "train/train"
-        val_prefix_inner = "val/val" # Usually val shards are in val/val-XXXX.tar? 
-        # Wait, the ls output for val showed 'val-000000.tar' inside 'val' dir?
-        # The ls output for val was:
-        # {"name":"val-000000.tar","sizeBytes":"..."}
-        # So it is val/val-000000.tar? No, the dir is 'val', and inside is 'val-000000.tar'.
-        # So prefix is 'val', and file is 'val-000000.tar'.
-        # My get_webdataset_loader constructs: {base_url}/{val_prefix}-{00..}.tar
-        # So if base_url is .../tiny-imagenet-wds, and val_prefix is 'val/val', it becomes .../tiny-imagenet-wds/val/val-000000.tar
-        # If the file is directly in val/, then val_prefix should be 'val/val' IF the file is named val-000000.tar?
-        # Wait, if the file is 'val/val-000000.tar', then val_prefix='val/val'.
-        # If the file is 'val/train-000000.tar' (like in imagenet), then val_prefix='val/train'.
-        # Let's assume standard naming 'val-XXXXXX.tar'.
-        val_prefix_inner = "val/val"
-        
-    else:
-        num_classes = 1000
-        wds_prefix = "imagenet-wds"
-        total_shards = args.wds_shards
-        val_shards = 50
-        classes = None # Use default ImageNet
-        train_prefix_inner = "train/train"
-        val_prefix_inner = "val/train"
-
+    num_classes = 200  # Tiny-ImageNet has 200 classes
+    WORKERS = args.num_workers  # Use from args instead of hardcoded
     
-    train_loader = get_webdataset_loader(
-        bucket_name=args.bucket_name,
-        prefix=wds_prefix,
+    train_loader, val_loader = get_data_loaders(
+        args.data_dir,
         batch_size=BATCH,
-        num_workers=WORKERS,
-        device=device,
-        is_train=True,
-        total_shards=total_shards,
-        train_prefix=train_prefix_inner,
-        classes=classes
-    )
-    
-    val_loader = get_webdataset_loader(
-        bucket_name=args.bucket_name,
-        prefix=wds_prefix,
-        batch_size=min(128, BATCH),
-        num_workers=WORKERS, # WDS works fine with workers on Mac usually, or 0
-        device=device,
-        is_train=False,
-        val_shards=val_shards, 
-        val_prefix=val_prefix_inner,
-        classes=classes
+        num_workers=WORKERS
     )
 
 
     # Modelo ResNet50 (1000 clases)
     # MASTER en CPU (para Hivemind)
-    model = build_model(num_classes=num_classes, pretrained=False)
+    model = build_model(num_classes=num_classes)
     model = model.to("cpu")
 
     # SHADOW en Device (para cómputo MPS/GPU)
-    model_on_device = build_model(num_classes=num_classes, pretrained=False)
+    model_on_device = build_model(num_classes=num_classes)
     model_on_device = model_on_device.to(device)
 
     # channels_last SOLO en CUDA (no en MPS por bug en backward)
@@ -346,53 +327,13 @@ def main():
         model_on_device = model_on_device.to(memory_format=torch.channels_last)
 
     # Optimizador base
-    base_optimizer = torch.optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM, weight_decay=1e-4)
-
-    # --- AUTOMATED DISCOVERY: FETCH ---
-    if args.fetch_gcs_path and not args.initial_peer:
-        print(f"🔍 Looking for initial peer address in {args.fetch_gcs_path}...")
-        try:
-            # Parse bucket and blob
-            if not args.fetch_gcs_path.startswith("gs://"):
-                raise ValueError("GCS path must start with gs://")
-            
-            parts = args.fetch_gcs_path[5:].split('/', 1)
-            bucket_name = parts[0]
-            blob_name = parts[1]
-            
-            # Use requests with timestamp to bypass GCS cache
-            import time
-            import requests
-            public_url = f"https://storage.googleapis.com/{bucket_name}/{blob_name}?t={int(time.time())}"
-            
-            print(f"   Trying public URL: {public_url}")
-            resp = requests.get(public_url, timeout=10)
-            
-            if resp.status_code == 200:
-                content = resp.text.strip()
-                print(f"✅ Found initial peer: {content}")
-                args.initial_peer = content
-            else:
-                print(f"⚠️  Could not fetch from public URL (status {resp.status_code}). Trying GCS client...")
-                # Fallback to GCS client
-                storage_client = storage.Client.create_anonymous_client()
-                bucket = storage_client.bucket(bucket_name)
-                blob = bucket.blob(blob_name)
-                content = blob.download_as_text().strip()
-                if content:
-                    print(f"✅ Found initial peer (via Client): {content}")
-                    args.initial_peer = content
-                else:
-                    print("⚠️  GCS file found but empty.")
-        except Exception as e:
-            print(f"⚠️  Failed to fetch initial peer from GCS: {e}")
-            print("   Will attempt to start without initial peer (or as standalone).")
+    base_optimizer = torch.optim.Adam(model.parameters(), lr=LR)    
 
     # DHT
     dht_kwargs = dict(
         host_maddrs=[f"/ip4/0.0.0.0/tcp/{args.host_port}"],
         start=True,
-        await_ready=False  # Don't wait in __init__, we will wait manually
+        await_ready=False
     )
     if args.initial_peer:
         dht_kwargs["initial_peers"] = [args.initial_peer]
@@ -408,45 +349,6 @@ def main():
     except TimeoutError:
         print("⚠️  DHT timed out waiting for readiness. Continuing anyway (might fail later)...")
     
-    # --- AUTOMATED DISCOVERY: ANNOUNCE ---
-    if args.announce_gcs_path:
-        print(f"📢 Announcing this peer to {args.announce_gcs_path}...")
-        try:
-            # 1. Get Public IP
-            import requests
-            try:
-                public_ip = requests.get('https://checkip.amazonaws.com', timeout=5).text.strip()
-            except:
-                public_ip = "127.0.0.1" # Fallback
-                
-            # 2. Construct Multiaddr
-            # /ip4/PUBLIC_IP/tcp/PORT/p2p/PEER_ID
-            peer_id = dht.peer_id
-            port = args.host_port
-            full_address = f"/ip4/{public_ip}/tcp/{port}/p2p/{peer_id}"
-            
-            print(f"   Public Address: {full_address}")
-            
-            # 3. Write to GCS
-            if not args.announce_gcs_path.startswith("gs://"):
-                raise ValueError("GCS path must start with gs://")
-                
-            parts = args.announce_gcs_path[5:].split('/', 1)
-            bucket_name = parts[0]
-            blob_name = parts[1]
-            
-            # Note: Writing requires credentials (not anonymous). 
-            # The VM should have Service Account attached.
-            storage_client = storage.Client() 
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            
-            blob.upload_from_string(full_address)
-            print(f"✅ Address written to GCS successfully.")
-            
-        except Exception as e:
-            print(f"❌ Failed to announce address to GCS: {e}")
-
     # Mostrar info
     maddrs = [str(m) for m in dht.get_visible_maddrs()]
     print("\n=== Hivemind DHT ===")
@@ -504,6 +406,10 @@ def main():
     target_epochs = EPOCHS
     last_seen_epoch = getattr(opt, "local_epoch", 0)
     checkpoint_path = None
+    
+    # Training accuracy tracking
+    train_correct = 0
+    train_total = 0
 
     print(f"\nEntrenando hasta {target_epochs} épocas globales (target_batch_size={TARGET_GLOBAL_BSZ}).")
     if args.use_checkpoint and best_accuracy > 0:
@@ -541,6 +447,13 @@ def main():
                     
                     logits = model_on_device(xb)
                     loss = F.cross_entropy(logits, yb)
+                    
+                    # Calculate training accuracy
+                    with torch.no_grad():
+                        pred = logits.argmax(dim=1)
+                        train_correct += (pred == yb).sum().item()
+                        train_total += yb.size(0)
+                    
                     loss.backward()
 
                     # 3. Sincronizar gradientes Device -> CPU
@@ -551,12 +464,20 @@ def main():
                                     p_cpu.grad = torch.zeros_like(p_cpu)
                                 p_cpu.grad.copy_(p_dev.grad)
 
+                    # 3.5 Sincronizar buffers Device -> CPU (CRITICAL for BatchNorm)
+                    with torch.no_grad():
+                        for b_cpu, b_dev in zip(model.buffers(), model_on_device.buffers()):
+                            b_cpu.copy_(b_dev)
+
                     # 4. Step en CPU (Hivemind)
                     opt.step()
                     opt.zero_grad()
+                    
+                    # Calculate current training accuracy
+                    current_train_acc = 100.0 * train_correct / max(1, train_total)
 
                     pbar.set_description(
-                        f"loss={loss.item():.4f}  epoch_g={getattr(opt,'local_epoch',0)}  best={best_accuracy:.2f}%"
+                        f"loss={loss.item():.4f}  train_acc={current_train_acc:.2f}%  epoch_g={getattr(opt,'local_epoch',0)}  best_val={best_accuracy:.2f}%"
                     )
                     pbar.update()
                     
@@ -566,11 +487,20 @@ def main():
                         epoch=getattr(opt, "local_epoch", 0),
                         batch=pbar.n, # approximate batch count
                         loss=loss.item(),
-                        learning_rate=current_lr
+                        learning_rate=current_lr,
+                        accuracy=current_train_acc  # Log training accuracy
                     )
 
                     current_epoch = getattr(opt, "local_epoch", last_seen_epoch)
                     if current_epoch != last_seen_epoch:
+                        # Print final training accuracy for completed epoch
+                        final_train_acc = 100.0 * train_correct / max(1, train_total)
+                        tqdm.write(f"[Época {last_seen_epoch}] Training accuracy: {final_train_acc:.2f}%")
+                        
+                        # Reset training accuracy counters for new epoch
+                        train_correct = 0
+                        train_total = 0
+                        
                         force_initial = (current_epoch == 1 and not args.no_initial_val)
                         do_eval = force_initial or (current_epoch % args.val_every == 0) or (current_epoch >= target_epochs)
                         if do_eval:
@@ -583,14 +513,14 @@ def main():
                                 for b_cpu, b_dev in zip(model.buffers(), model_on_device.buffers()):
                                     b_dev.copy_(b_cpu)
 
-                            val_acc = evaluate_accuracy(model_on_device, val_loader, device, max_batches=args.val_batches)
-                            tqdm.write(f"[Época {current_epoch}] Accuracy validación: {val_acc:.2f}%")
+                            val_loss, val_acc = evaluate_accuracy(model_on_device, val_loader, device, max_batches=args.val_batches)
+                            tqdm.write(f"[Época {current_epoch}] Validation - Loss: {val_loss:.4f}, Accuracy: {val_acc:.2f}%")
                             
-                            # Log validation accuracy
+                            # Log validation metrics
                             training_logger.log_step(
                                 epoch=current_epoch,
                                 batch=pbar.n,
-                                loss=loss.item(), # Log last loss
+                                loss=val_loss,  # Log validation loss
                                 learning_rate=scheduler.get_last_lr()[0],
                                 accuracy=val_acc
                             )
