@@ -176,8 +176,7 @@ def parse_arguments():
     p = argparse.ArgumentParser(description="Tiny-ImageNet x ResNet50 x Hivemind")
     p.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
                    help="Forzar dispositivo (cpu, cuda o mps). Por defecto: auto-detectar")
-    p.add_argument("--use_checkpoint", action="store_true",
-                   help="Cargar checkpoint si existe (latest o best)")
+
     p.add_argument("--initial_peer", type=str, default=None,
                    help="Multiaddr de un peer inicial para bootstrap (opcional en el primer nodo)")
     p.add_argument("--val_every", type=int, default=1,
@@ -381,26 +380,26 @@ def main():
     scheduler = torch.optim.lr_scheduler.MultiStepLR(base_optimizer, milestones=args.scheduler_milestones, gamma=args.scheduler_gamma)
 
     # --- LOAD CHECKPOINT AFTER OPT CREATION ---
-    if args.use_checkpoint:
-        # Intentar cargar latest primero
-        latest_path = os.path.join(CHECKPOINT_DIR, "latest_checkpoint.pt")
-        best_path = os.path.join(CHECKPOINT_DIR, "best_checkpoint.pt")
+    # --- LOAD CHECKPOINT AFTER OPT CREATION ---
+    # Intentar cargar latest primero
+    latest_path = os.path.join(CHECKPOINT_DIR, "latest_checkpoint.pt")
+    best_path = os.path.join(CHECKPOINT_DIR, "best_checkpoint.pt")
+    
+    if os.path.exists(latest_path):
+        print(f"Intentando reanudar desde LATEST: {latest_path}")
+        # IMPORTANTE: Pasamos 'opt' (Hivemind Optimizer) en lugar de 'base_optimizer'
+        start_epoch, acc = load_checkpoint(latest_path, model, opt, scheduler, device)
         
-        if os.path.exists(latest_path):
-            print(f"Intentando reanudar desde LATEST: {latest_path}")
-            # IMPORTANTE: Pasamos 'opt' (Hivemind Optimizer) en lugar de 'base_optimizer'
-            start_epoch, acc = load_checkpoint(latest_path, model, opt, scheduler, device)
-            
-            if os.path.exists(best_path):
-                checkpoint = torch.load(best_path, map_location='cpu')
-                best_accuracy = checkpoint.get("val_accuracy", acc)
-            else:
-                best_accuracy = acc
-        elif os.path.exists(best_path):
-            print(f"Intentando reanudar desde BEST: {best_path}")
-            start_epoch, best_accuracy = load_checkpoint(best_path, model, opt, scheduler, device)
+        if os.path.exists(best_path):
+            checkpoint = torch.load(best_path, map_location='cpu')
+            best_accuracy = checkpoint.get("val_accuracy", acc)
         else:
-            print("No se encontraron checkpoints para cargar.")
+            best_accuracy = acc
+    elif os.path.exists(best_path):
+        print(f"Intentando reanudar desde BEST: {best_path}")
+        start_epoch, best_accuracy = load_checkpoint(best_path, model, opt, scheduler, device)
+    else:
+        print("No se encontraron checkpoints para cargar.")
     # ------------------------------------------
 
     target_epochs = EPOCHS
@@ -412,7 +411,7 @@ def main():
     train_total = 0
 
     print(f"\nEntrenando hasta {target_epochs} épocas globales (target_batch_size={TARGET_GLOBAL_BSZ}).")
-    if args.use_checkpoint and best_accuracy > 0:
+    if best_accuracy > 0:
         print(f"Continuando desde mejor accuracy: {best_accuracy:.2f}%")
 
     try:
