@@ -358,6 +358,51 @@ def main():
     # Optimizador base
     base_optimizer = torch.optim.Adam(model.parameters(), lr=LR)    
 
+
+    # --- AUTOMATED DISCOVERY: FETCH ---
+    if args.fetch_gcs_path and not args.initial_peer:
+        print(f"🔍 Looking for initial peer address in {args.fetch_gcs_path}...")
+        try:
+            # Parse bucket and blob
+            if not args.fetch_gcs_path.startswith("gs://"):
+                raise ValueError("GCS path must start with gs://")
+            
+            parts = args.fetch_gcs_path[5:].split('/', 1)
+            bucket_name = parts[0]
+            blob_name = parts[1]
+            
+            # Use requests with timestamp to bypass GCS cache
+            import time
+            import requests
+            from google.cloud import storage
+            
+            public_url = f"https://storage.googleapis.com/{bucket_name}/{blob_name}?t={int(time.time())}"
+            
+            print(f"   Trying public URL: {public_url}")
+            try:
+                resp = requests.get(public_url, timeout=10)
+                if resp.status_code == 200:
+                    content = resp.text.strip()
+                    print(f"✅ Found initial peer: {content}")
+                    args.initial_peer = content
+                else:
+                    raise Exception(f"Status code {resp.status_code}")
+            except Exception as e:
+                print(f"⚠️  Could not fetch from public URL ({e}). Trying GCS client...")
+                # Fallback to GCS client
+                storage_client = storage.Client.create_anonymous_client()
+                bucket = storage_client.bucket(bucket_name)
+                blob = bucket.blob(blob_name)
+                content = blob.download_as_text().strip()
+                if content:
+                    print(f"✅ Found initial peer (via Client): {content}")
+                    args.initial_peer = content
+                else:
+                    print("⚠️  GCS file found but empty.")
+        except Exception as e:
+            print(f"⚠️  Failed to fetch initial peer from GCS: {e}")
+            print("   Will attempt to start without initial peer (or as standalone).")
+
     # DHT
     dht_kwargs = dict(
         host_maddrs=[f"/ip4/0.0.0.0/tcp/{args.host_port}"],
@@ -369,6 +414,46 @@ def main():
 
     print(f"=== Hivemind DHT ===")
     dht = hivemind.DHT(**dht_kwargs)
+    
+    # --- AUTOMATED DISCOVERY: ANNOUNCE ---
+    if args.announce_gcs_path:
+        print(f"📢 Announcing this peer to {args.announce_gcs_path}...")
+        try:
+            # 1. Get Public IP
+            import requests
+            try:
+                public_ip = requests.get('https://checkip.amazonaws.com', timeout=5).text.strip()
+            except:
+                public_ip = "127.0.0.1" # Fallback
+                
+            # 2. Construct Multiaddr
+            # /ip4/PUBLIC_IP/tcp/PORT/p2p/PEER_ID
+            peer_id = dht.peer_id
+            port = args.host_port
+            full_address = f"/ip4/{public_ip}/tcp/{port}/p2p/{peer_id}"
+            
+            print(f"   Public Address: {full_address}")
+            
+            # 3. Write to GCS
+            if not args.announce_gcs_path.startswith("gs://"):
+                raise ValueError("GCS path must start with gs://")
+                
+            parts = args.announce_gcs_path[5:].split('/', 1)
+            bucket_name = parts[0]
+            blob_name = parts[1]
+            
+            # Note: Writing requires credentials (not anonymous). 
+            # The VM should have Service Account attached.
+            from google.cloud import storage
+            storage_client = storage.Client() 
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            
+            blob.upload_from_string(full_address)
+            print(f"✅ Address written to GCS successfully.")
+            
+        except Exception as e:
+            print(f"❌ Failed to announce address to GCS: {e}")
     
     # Wait for DHT to be ready (with longer timeout than default 15s)
     print("⏳ Waiting for DHT to be ready...")
