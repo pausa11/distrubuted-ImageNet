@@ -190,9 +190,9 @@ def parse_arguments():
 
     p.add_argument("--batch_size", type=int, default=64,
                    help="Batch size local (por defecto: 64). Reducir si hay OOM.")
-    p.add_argument("--target_batch_size", type=int, default=10000,
-                   help="Batch size global objetivo para Hivemind (por defecto: 16384).")
-    p.add_argument("--val_batches", type=int, default=None,
+    p.add_argument("--target_batch_size", type=int, default=50000,
+                   help="Batch size global objetivo para Hivemind (por defecto: 50000).")
+    p.add_argument("--val_batches", type=int, default=100,
                    help="Número máximo de batches para validar (default: 100). None para validar todo.")
     p.add_argument("--no_initial_val", action="store_true",
                    help="No forzar validación en la época 1.")
