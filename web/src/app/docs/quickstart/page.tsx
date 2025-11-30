@@ -62,34 +62,34 @@ export default function QuickStartPage() {
 
                 <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Argumentos Comunes</h2>
                 <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700">
+                        <thead className="bg-gray-50 dark:bg-gray-800">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Argumento</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Descripción</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Por Defecto</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Argumento</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Descripción</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Por Defecto</th>
                             </tr>
                         </thead>
-                        <tbody className="bg-white divide-y divide-gray-200 text-sm">
+                        <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                             <tr>
-                                <td className="px-6 py-4 font-mono">--batch_size</td>
-                                <td className="px-6 py-4">Tamaño de lote local por paso.</td>
-                                <td className="px-6 py-4">64</td>
+                                <td className="px-6 py-4 font-mono text-blue-600 dark:text-blue-400">--batch_size</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">Tamaño de lote local por paso.</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">64</td>
                             </tr>
                             <tr>
-                                <td className="px-6 py-4 font-mono">--target_batch_size</td>
-                                <td className="px-6 py-4">Tamaño de lote objetivo global para promediar.</td>
-                                <td className="px-6 py-4">50000</td>
+                                <td className="px-6 py-4 font-mono text-blue-600 dark:text-blue-400">--target_batch_size</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">Tamaño de lote objetivo global para promediar.</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">50000</td>
                             </tr>
                             <tr>
-                                <td className="px-6 py-4 font-mono">--device</td>
-                                <td className="px-6 py-4">Forzar dispositivo (cpu, cuda, mps).</td>
-                                <td className="px-6 py-4">Auto</td>
+                                <td className="px-6 py-4 font-mono text-blue-600 dark:text-blue-400">--device</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">Forzar dispositivo (cpu, cuda, mps).</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">Auto</td>
                             </tr>
                             <tr>
-                                <td className="px-6 py-4 font-mono">--num_workers</td>
-                                <td className="px-6 py-4">Trabajadores de carga de datos. Usar 0 para MPS.</td>
-                                <td className="px-6 py-4">0</td>
+                                <td className="px-6 py-4 font-mono text-blue-600 dark:text-blue-400">--num_workers</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">Trabajadores de carga de datos. Usar 0 para MPS.</td>
+                                <td className="px-6 py-4 text-gray-700 dark:text-gray-300">0</td>
                             </tr>
                         </tbody>
                     </table>
