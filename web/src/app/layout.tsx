@@ -2,13 +2,12 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Project Documentation",
-  description: "Documentation, paper, and blog for the project",
+  title: "Entrenamiento Distribuido Asíncrono de ImageNet1k",
+  description: "Documentación, paper y blog para el Entrenamiento Distribuido Asíncrono de ImageNet1k",
 };
 
 export default function RootLayout({
@@ -23,7 +22,6 @@ export default function RootLayout({
         <main className="flex-grow">
           {children}
         </main>
-        <Footer />
       </body>
     </html>
   );

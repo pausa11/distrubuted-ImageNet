@@ -1,63 +1,28 @@
 export default function DocsPage() {
     return (
-        <div className="flex min-h-[calc(100vh-4rem)]">
-            {/* Sidebar */}
-            <aside className="w-64 bg-white border-r border-gray-200 hidden md:block">
-                <div className="p-6">
-                    <h3 className="font-semibold text-gray-900 uppercase tracking-wider text-sm mb-4">
-                        Getting Started
-                    </h3>
-                    <ul className="space-y-3">
-                        <li>
-                            <a href="#" className="text-blue-600 font-medium block">Introduction</a>
-                        </li>
-                        <li>
-                            <a href="#" className="text-gray-600 hover:text-gray-900 block">Installation</a>
-                        </li>
-                        <li>
-                            <a href="#" className="text-gray-600 hover:text-gray-900 block">Quick Start</a>
-                        </li>
-                    </ul>
+        <>
+            <h1 className="text-4xl font-bold text-gray-900 mb-6">Introducción</h1>
+            <p className="text-lg text-gray-600 mb-8">
+                Bienvenido a la documentación del proyecto <strong>Entrenamiento Distribuido Asíncrono de ImageNet1k</strong>.
+                Este sistema permite el entrenamiento descentralizado de modelos ResNet50 en el dataset ImageNet utilizando hardware heterogéneo.
+            </p>
 
-                    <h3 className="font-semibold text-gray-900 uppercase tracking-wider text-sm mt-8 mb-4">
-                        Core Concepts
-                    </h3>
-                    <ul className="space-y-3">
-                        <li>
-                            <a href="#" className="text-gray-600 hover:text-gray-900 block">Architecture</a>
-                        </li>
-                        <li>
-                            <a href="#" className="text-gray-600 hover:text-gray-900 block">Data Flow</a>
-                        </li>
-                    </ul>
-                </div>
-            </aside>
+            <div className="prose prose-blue max-w-none">
+                <h2>Visión General</h2>
+                <p>
+                    Nuestro proyecto aprovecha la librería <code>hivemind</code> para distribuir el proceso de entrenamiento entre múltiples pares.
+                    A diferencia del entrenamiento distribuido tradicional que requiere un clúster de alto ancho de banda, nuestro enfoque funciona a través de internet
+                    con hardware de consumo.
+                </p>
 
-            {/* Content */}
-            <div className="flex-1 p-8 md:p-12">
-                <div className="max-w-3xl">
-                    <h1 className="text-4xl font-bold text-gray-900 mb-6">Introduction</h1>
-                    <p className="text-lg text-gray-600 mb-8">
-                        Welcome to the documentation. This project aims to solve X by doing Y.
-                        Here you will find detailed instructions on how to set up, configure, and use the system.
-                    </p>
-
-                    <div className="prose prose-blue max-w-none">
-                        <h2>Overview</h2>
-                        <p>
-                            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
-                            Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-                        </p>
-
-                        <h2>Key Features</h2>
-                        <ul>
-                            <li>Feature 1: Description of feature 1.</li>
-                            <li>Feature 2: Description of feature 2.</li>
-                            <li>Feature 3: Description of feature 3.</li>
-                        </ul>
-                    </div>
-                </div>
+                <h2>Características Principales</h2>
+                <ul>
+                    <li><strong>Entrenamiento Descentralizado:</strong> Sin servidor de parámetros central; los pares se comunican vía DHT.</li>
+                    <li><strong>Tolerancia a Fallos:</strong> Los pares pueden unirse y salir en cualquier momento sin detener el entrenamiento.</li>
+                    <li><strong>Streaming de Datos Eficiente:</strong> Utiliza WebDataset para transmitir datos de ImageNet desde Google Cloud Storage.</li>
+                    <li><strong>Hardware Heterogéneo:</strong> Soporta CUDA, MPS (Apple Silicon) y CPU.</li>
+                </ul>
             </div>
-        </div>
+        </>
     );
 }
