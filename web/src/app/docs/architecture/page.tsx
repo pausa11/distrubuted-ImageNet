@@ -3,14 +3,14 @@ import Mermaid from "@/components/Mermaid";
 export default function ArchitecturePage() {
     return (
         <>
-            <h1 className="text-4xl font-bold text-gray-900 mb-6">Arquitectura del Sistema</h1>
+            <h1 className="text-5xl font-extrabold text-gray-900 dark:text-white mb-8 tracking-tight">Arquitectura del Sistema</h1>
 
-            <div className="prose prose-blue max-w-none">
+            <div className="prose prose-blue dark:prose-invert max-w-none prose-headings:font-bold prose-a:text-blue-600 dark:prose-a:text-blue-400">
                 <p className="lead text-xl text-gray-600">
                     El sistema está diseñado para ser totalmente descentralizado, tolerante a fallos y capaz de ejecutarse en hardware heterogéneo.
                 </p>
 
-                <h2 className="mt-8">Visión General de Alto Nivel</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Visión General de Alto Nivel</h2>
                 <p>
                     La arquitectura consta de tres componentes principales:
                 </p>
@@ -20,9 +20,9 @@ export default function ArchitecturePage() {
                     <li><strong>Almacenamiento (GCS):</strong> Almacenamiento centralizado para el dataset inmutable (ImageNet) y descubrimiento de pares (bootstrapping).</li>
                 </ul>
 
-                <h2 className="mt-8">Detalles de los Componentes</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Detalles de los Componentes</h2>
 
-                <h3 className="text-xl font-semibold mt-6 mb-3">1. Nodos Trabajadores</h3>
+                <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mt-8 mb-3">1. Nodos Trabajadores</h3>
                 <p>
                     Cada trabajador ejecuta un bucle de entrenamiento PyTorch. El modelo (ResNet50) se replica en todos los trabajadores.
                     Los trabajadores calculan gradientes en su lote local de datos y luego colaboran con otros pares para promediar estos gradientes.
@@ -31,21 +31,21 @@ export default function ArchitecturePage() {
                     <strong>Tecnologías Clave:</strong> PyTorch, Hivemind, Torchvision.
                 </p>
 
-                <h3 className="text-xl font-semibold mt-6 mb-3">2. Optimización Descentralizada (Hivemind)</h3>
+                <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mt-8 mb-3">2. Optimización Descentralizada (Hivemind)</h3>
                 <p>
                     En lugar de un servidor de parámetros central, utilizamos <code>hivemind.Optimizer</code>. Este optimizador envuelve al optimizador estándar de PyTorch
                     y maneja la comunicación. Encuentra pares óptimos en la DHT para promediar gradientes, asegurando que los parámetros del modelo
                     converjan a través de la red.
                 </p>
 
-                <h3 className="text-xl font-semibold mt-6 mb-3">3. Streaming de Datos (WebDataset)</h3>
+                <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mt-8 mb-3">3. Streaming de Datos (WebDataset)</h3>
                 <p>
                     El dataset ImageNet es demasiado grande para descargarlo en cada trabajador. Utilizamos <strong>WebDataset</strong> para transmitir muestras de entrenamiento
                     directamente desde Google Cloud Storage (GCS). Los datos se fragmentan en miles de archivos <code>.tar</code>, permitiendo un acceso paralelo eficiente
                     sin el cuello de botella del sistema de archivos local.
                 </p>
 
-                <h2 className="mt-8">Diagrama de Arquitectura</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Diagrama de Arquitectura</h2>
                 <div className="my-8">
                     <Mermaid chart={`graph TD
     subgraph Storage ["Google Cloud Storage"]

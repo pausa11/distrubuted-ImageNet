@@ -1,9 +1,9 @@
 export default function QuickStartPage() {
     return (
         <>
-            <h1 className="text-4xl font-bold text-gray-900 mb-6">Inicio Rápido</h1>
+            <h1 className="text-5xl font-extrabold text-gray-900 dark:text-white mb-8 tracking-tight">Inicio Rápido</h1>
 
-            <div className="prose prose-blue max-w-none">
+            <div className="prose prose-blue dark:prose-invert max-w-none prose-headings:font-bold prose-a:text-blue-600 dark:prose-a:text-blue-400">
                 <p className="lead text-xl text-gray-600">
                     Pon en marcha tu nodo de entrenamiento distribuido en minutos.
                 </p>
@@ -23,7 +23,7 @@ export default function QuickStartPage() {
                     </div>
                 </div>
 
-                <h2 className="mt-8">Opción 1: Iniciar como Par Inicial (Bootstrap)</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Opción 1: Iniciar como Par Inicial (Bootstrap)</h2>
                 <p>
                     Si eres el primer nodo en la red, necesitas iniciar como el par inicial.
                     Opcionalmente puedes anunciar tu dirección a GCS para que otros puedan encontrarte.
@@ -36,13 +36,13 @@ export default function QuickStartPage() {
                     </pre>
                 </div>
 
-                <h2 className="mt-8">Opción 2: Iniciar como Par Trabajador (Worker)</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Opción 2: Iniciar como Par Trabajador (Worker)</h2>
                 <p>
                     La mayoría de los nodos se unirán como trabajadores. Necesitas saber la dirección de un par existente,
                     o obtenerla de GCS si fue anunciada.
                 </p>
 
-                <h3 className="text-lg font-semibold mt-4">Método A: Auto-descubrimiento vía GCS</h3>
+                <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mt-8 mb-3">Método A: Auto-descubrimiento vía GCS</h3>
                 <div className="bg-gray-900 text-gray-100 p-4 rounded-md overflow-x-auto">
                     <pre className="text-sm font-mono">
                         {`python src/dhtPeerImagenet.py \\
@@ -51,7 +51,7 @@ export default function QuickStartPage() {
                     </pre>
                 </div>
 
-                <h3 className="text-lg font-semibold mt-4">Método B: Dirección de Par Manual</h3>
+                <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mt-8 mb-3">Método B: Dirección de Par Manual</h3>
                 <div className="bg-gray-900 text-gray-100 p-4 rounded-md overflow-x-auto">
                     <pre className="text-sm font-mono">
                         {`python src/dhtPeerImagenet.py \\
@@ -60,7 +60,7 @@ export default function QuickStartPage() {
                     </pre>
                 </div>
 
-                <h2 className="mt-8">Argumentos Comunes</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Argumentos Comunes</h2>
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
@@ -95,7 +95,7 @@ export default function QuickStartPage() {
                     </table>
                 </div>
 
-                <h2 className="mt-8">Monitoreo</h2>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Monitoreo</h2>
                 <p>
                     El script de entrenamiento registra métricas en el directorio <code>stats/</code>.
                     Puedes monitorear el progreso revisando los archivos CSV generados o la salida estándar.
