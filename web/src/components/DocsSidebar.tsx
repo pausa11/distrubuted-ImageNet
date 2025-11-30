@@ -39,6 +39,21 @@ export default function DocsSidebar() {
                             Flujo de Datos
                         </Link>
                     </li>
+                    <li>
+                        <Link href="/docs/hivemind" className="text-gray-600 hover:text-blue-600 block transition-colors">
+                            Profundizando en Hivemind
+                        </Link>
+                    </li>
+                    <li>
+                        <Link href="/docs/resnet50" className="text-gray-600 hover:text-blue-600 block transition-colors">
+                            Arquitectura ResNet50
+                        </Link>
+                    </li>
+                    <li>
+                        <Link href="/docs/p2p" className="text-gray-600 hover:text-blue-600 block transition-colors">
+                            Redes P2P
+                        </Link>
+                    </li>
                 </ul>
             </div>
         </aside>

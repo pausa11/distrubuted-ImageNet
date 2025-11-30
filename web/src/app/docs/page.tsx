@@ -22,6 +22,17 @@ export default function DocsPage() {
                     <li><strong>Streaming de Datos Eficiente:</strong> Utiliza WebDataset para transmitir datos de ImageNet desde Google Cloud Storage.</li>
                     <li><strong>Hardware Heterogéneo:</strong> Soporta CUDA, MPS (Apple Silicon) y CPU.</li>
                 </ul>
+                <h2 className="text-3xl font-bold text-gray-800 dark:text-gray-100 mt-10 mb-4">Referencias</h2>
+                <p>
+                    Este proyecto toma inspiración del siguiente trabajo de investigación:
+                </p>
+                <ul>
+                    <li>
+                        <a href="https://ieeexplore.ieee.org/document/9760359" target="_blank" rel="noopener noreferrer">
+                            IEEE Xplore Document 9760359
+                        </a>
+                    </li>
+                </ul>
             </div>
         </>
     );

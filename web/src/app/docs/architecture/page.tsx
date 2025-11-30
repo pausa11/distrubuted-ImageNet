@@ -74,6 +74,8 @@ export default function ArchitecturePage() {
                 <p className="text-sm text-gray-500 mt-2 text-center">
                     Figura 1: Arquitectura de alto nivel mostrando el flujo de datos y la comunicación peer-to-peer.
                 </p>
+
+
             </div>
         </>
     );
