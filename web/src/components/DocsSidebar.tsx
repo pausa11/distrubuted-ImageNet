@@ -54,6 +54,16 @@ export default function DocsSidebar() {
                             Redes P2P
                         </Link>
                     </li>
+                    <li>
+                        <Link href="/docs/webdataset" className="text-gray-600 hover:text-blue-600 block transition-colors">
+                            WebDataset & Streaming
+                        </Link>
+                    </li>
+                    <li>
+                        <Link href="/docs/imagenet" className="text-gray-600 hover:text-blue-600 block transition-colors">
+                            Dataset ImageNet1k
+                        </Link>
+                    </li>
                 </ul>
             </div>
         </aside>
