@@ -11,8 +11,23 @@ export default function Navbar() {
                         </Link>
                     </div>
                     <div className="hidden sm:flex sm:space-x-8">
-                        <Link href="/docs" className="text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2 rounded-md text-sm font-medium transition-colors">
-                            Documentación
+                        <Link
+                            href="/docs"
+                            className="text-gray-300 hover:bg-gray-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
+                        >
+                            Docs
+                        </Link>
+                        <Link
+                            href="/statistics"
+                            className="text-gray-300 hover:bg-gray-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
+                        >
+                            Statistics
+                        </Link>
+                        <Link
+                            href="/inference"
+                            className="text-gray-300 hover:bg-gray-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
+                        >
+                            Inference
                         </Link>
                     </div>
                 </div>
