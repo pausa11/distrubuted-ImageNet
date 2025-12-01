@@ -2,11 +2,8 @@ import os
 import json
 import hashlib
 import io
-import random
-import concurrent.futures
 import threading
-import time
-from typing import Optional, List, Tuple, Set
+from typing import Optional, List, Tuple
 
 import torch
 from torchvision import datasets, transforms

@@ -273,12 +273,12 @@ def get_next_log_paths(base_dir="stats"):
 def main():
     args = parse_arguments()
 
-    RUN_ID = "tinyimagenet_resnet50"
+    RUN_ID = "imagenet_resnet50"
     BATCH = args.batch_size
     TARGET_GLOBAL_BSZ = args.target_batch_size
     EPOCHS = args.epochs
     LR = args.lr
-    WORKERS = 0          # En MPS con fork, 0 es OBLIGATORIO para evitar SegFaults.
+    WORKERS = 0
     MATCHMAKING_TIME = 60.0
     AVERAGING_TIMEOUT = 120.0
     CHECKPOINT_DIR = "./checkpoints"
@@ -300,7 +300,7 @@ def main():
             pass
 
     # DataLoaders (WebDataset)
-    print(f"🚀 Loading ImageNet from {args.data_dir} (WebDataset)")
+    print(f"Loading ImageNet from {args.data_dir} (WebDataset)")
     
     # Load ImageNet classes
     try:
@@ -309,7 +309,7 @@ def main():
         num_classes = len(classes)
         print(f"Loaded {num_classes} classes from imagenet_classes.py")
     except ImportError:
-        print("⚠️  Could not import imagenet_classes.py. Defaulting to 1000 classes (ImageNet-1k standard) but labels might be wrong if dataset is subset.")
+        print("Could not import imagenet_classes.py. Defaulting to 1000 classes (ImageNet-1k standard) but labels might be wrong if dataset is subset.")
         num_classes = 1000
         classes = None
 
@@ -459,9 +459,9 @@ def main():
     print("⏳ Waiting for DHT to be ready...")
     try:
         dht.wait_until_ready(timeout=60.0)
-        print("✅ DHT is ready!")
+        print("DHT is ready!")
     except TimeoutError:
-        print("⚠️  DHT timed out waiting for readiness. Continuing anyway (might fail later)...")
+        print("DHT timed out waiting for readiness. Continuing anyway (might fail later)...")
     
     # Mostrar info
     maddrs = [str(m) for m in dht.get_visible_maddrs()]
@@ -469,7 +469,7 @@ def main():
     for m in maddrs:
         print("VISIBLE_MADDR:", m)
     if not args.initial_peer:
-        print("\n⚠️  Usa una dirección que NO sea 127.0.0.1 como --initial_peer")
+        print("\nUsa una dirección que NO sea 127.0.0.1 como --initial_peer")
 
     # Checkpoint (opcional)
     best_accuracy = -1.0
@@ -487,14 +487,12 @@ def main():
         matchmaking_time=MATCHMAKING_TIME,
         averaging_timeout=AVERAGING_TIMEOUT,
         verbose=True,
-        # Si usas GCS, puede que quieras aumentar el timeout si la carga de datos es lenta
     )
 
     # Scheduler
     # Scheduler (usamos base_optimizer porque Hivemind Optimizer envuelve los param_groups de forma compleja)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(base_optimizer, milestones=args.scheduler_milestones, gamma=args.scheduler_gamma)
 
-    # --- LOAD CHECKPOINT AFTER OPT CREATION ---
     # --- LOAD CHECKPOINT AFTER OPT CREATION ---
     # Intentar cargar latest primero
     latest_path = os.path.join(CHECKPOINT_DIR, "latest_checkpoint.pt")
