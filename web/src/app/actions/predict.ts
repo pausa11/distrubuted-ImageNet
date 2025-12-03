@@ -9,9 +9,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 const execAsync = promisify(exec);
 
-const PREDICT_SCRIPT = '../neural-network-train/scripts/predict.py';
-const CHECKPOINT_PATH = '../neural-network-train/checkpoints/best_checkpoint.pt';
-
 export interface PredictionResult {
     class_index: number;
     synset: string;
