@@ -9,8 +9,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 const execAsync = promisify(exec);
 
-const PREDICT_SCRIPT = '/home/daniel/distrubuted-ImageNet/neural-network-train/scripts/predict.py';
-const CHECKPOINT_PATH = '/home/daniel/distrubuted-ImageNet/neural-network-train/checkpoints/best_checkpoint.pt';
+const PREDICT_SCRIPT = '../neural-network-train/scripts/predict.py';
+const CHECKPOINT_PATH = '../neural-network-train/checkpoints/best_checkpoint.pt';
 
 export interface PredictionResult {
     class_index: number;
@@ -31,7 +31,7 @@ export async function predictImage(formData: FormData): Promise<PredictionResult
     try {
         await writeFile(tempFilePath, buffer);
 
-        const command = `/home/daniel/distrubuted-ImageNet/.venv/bin/python ${PREDICT_SCRIPT} --image_path "${tempFilePath}" --checkpoint_path "${CHECKPOINT_PATH}"`;
+        const command = `../.venv/bin/python ${PREDICT_SCRIPT} --image_path "${tempFilePath}" --checkpoint_path "${CHECKPOINT_PATH}"`;
 
         const { stdout, stderr } = await execAsync(command);
 

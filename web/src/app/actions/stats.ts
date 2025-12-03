@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import Papa from 'papaparse';
 
-const STATS_DIR = '/home/daniel/distrubuted-ImageNet/neural-network-train/src/stats/kali';
+const STATS_DIR = '../neural-network-train/src/stats/';
 
 export interface TrainingMetric {
     timestamp: string;
@@ -29,9 +29,22 @@ export interface RunData {
     system: SystemMetric[];
 }
 
-export async function getStatsRuns(): Promise<string[]> {
+export async function getStatsFolders(): Promise<string[]> {
     try {
-        const files = await fs.promises.readdir(STATS_DIR);
+        const entries = await fs.promises.readdir(STATS_DIR, { withFileTypes: true });
+        return entries
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name);
+    } catch (error) {
+        console.error('Error reading stats directory:', error);
+        return [];
+    }
+}
+
+export async function getStatsRuns(folder: string): Promise<string[]> {
+    try {
+        const folderPath = path.join(STATS_DIR, folder);
+        const files = await fs.promises.readdir(folderPath);
         const runs = new Set<string>();
 
         files.forEach((file) => {
@@ -53,14 +66,14 @@ export async function getStatsRuns(): Promise<string[]> {
             return numA - numB;
         });
     } catch (error) {
-        console.error('Error reading stats directory:', error);
+        console.error(`Error reading stats directory ${folder}:`, error);
         return [];
     }
 }
 
-async function parseCsv<T>(filename: string): Promise<T[]> {
+async function parseCsv<T>(folder: string, filename: string): Promise<T[]> {
     try {
-        const filePath = path.join(STATS_DIR, filename);
+        const filePath = path.join(STATS_DIR, folder, filename);
         // Check if file exists
         try {
             await fs.promises.access(filePath);
@@ -77,18 +90,18 @@ async function parseCsv<T>(filename: string): Promise<T[]> {
         });
         return data;
     } catch (error) {
-        console.error(`Error reading file ${filename}:`, error);
+        console.error(`Error reading file ${filename} in ${folder}:`, error);
         return [];
     }
 }
 
-export async function getRunData(runId: string): Promise<RunData> {
+export async function getRunData(folder: string, runId: string): Promise<RunData> {
     const trainingFile = runId === 'global' ? 'training_metrics.csv' : `${runId}_training_metrics.csv`;
     const systemFile = runId === 'global' ? 'system_metrics.csv' : `${runId}_system_metrics.csv`;
 
     const [training, system] = await Promise.all([
-        parseCsv<TrainingMetric>(trainingFile),
-        parseCsv<SystemMetric>(systemFile)
+        parseCsv<TrainingMetric>(folder, trainingFile),
+        parseCsv<SystemMetric>(folder, systemFile)
     ]);
 
     return { training, system };

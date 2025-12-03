@@ -11,61 +11,101 @@ import {
     Legend,
     ResponsiveContainer,
 } from 'recharts';
-import { getRunData, RunData } from '@/app/actions/stats';
+import { getStatsRuns, getRunData, RunData } from '@/app/actions/stats';
 
 interface StatsViewerProps {
-    runs: string[];
+    folders: string[];
 }
 
-export default function StatsViewer({ runs }: StatsViewerProps) {
-    const [selectedRun, setSelectedRun] = useState<string>(runs[0] || '');
+export default function StatsViewer({ folders }: StatsViewerProps) {
+    const [selectedFolder, setSelectedFolder] = useState<string>(folders[0] || '');
+    const [runs, setRuns] = useState<string[]>([]);
+    const [selectedRun, setSelectedRun] = useState<string>('');
     const [data, setData] = useState<RunData | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [activeTab, setActiveTab] = useState<'training' | 'system'>('training');
 
     useEffect(() => {
-        if (selectedRun) {
+        if (selectedFolder) {
             setLoading(true);
-            getRunData(selectedRun)
+            getStatsRuns(selectedFolder)
+                .then((fetchedRuns) => {
+                    setRuns(fetchedRuns);
+                    if (fetchedRuns.length > 0) {
+                        setSelectedRun(fetchedRuns[0]);
+                    } else {
+                        setSelectedRun('');
+                        setData(null);
+                    }
+                })
+                .catch((err) => console.error(err))
+                .finally(() => setLoading(false));
+        }
+    }, [selectedFolder]);
+
+    useEffect(() => {
+        if (selectedFolder && selectedRun) {
+            setLoading(true);
+            getRunData(selectedFolder, selectedRun)
                 .then((fetchedData) => {
                     setData(fetchedData);
                 })
                 .catch((err) => console.error(err))
                 .finally(() => setLoading(false));
         }
-    }, [selectedRun]);
+    }, [selectedFolder, selectedRun]);
 
-    if (runs.length === 0) {
-        return <div className="text-center text-gray-500">No runs found.</div>;
+    if (folders.length === 0) {
+        return <div className="text-center text-gray-500">No device folders found.</div>;
     }
 
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-4">
-                    <label htmlFor="run-select" className="font-medium text-gray-700 dark:text-gray-300">
-                        Select Run:
-                    </label>
-                    <select
-                        id="run-select"
-                        value={selectedRun}
-                        onChange={(e) => setSelectedRun(e.target.value)}
-                        className="block w-64 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white sm:text-sm p-2 border"
-                    >
-                        {runs.map((run) => (
-                            <option key={run} value={run}>
-                                {run}
-                            </option>
-                        ))}
-                    </select>
+                    <div className="flex items-center space-x-2">
+                        <label htmlFor="folder-select" className="font-medium text-gray-700 dark:text-gray-300">
+                            Device:
+                        </label>
+                        <select
+                            id="folder-select"
+                            value={selectedFolder}
+                            onChange={(e) => setSelectedFolder(e.target.value)}
+                            className="block w-48 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white sm:text-sm p-2 border"
+                        >
+                            {folders.map((folder) => (
+                                <option key={folder} value={folder}>
+                                    {folder}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                        <label htmlFor="run-select" className="font-medium text-gray-700 dark:text-gray-300">
+                            Run:
+                        </label>
+                        <select
+                            id="run-select"
+                            value={selectedRun}
+                            onChange={(e) => setSelectedRun(e.target.value)}
+                            className="block w-48 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-800 dark:border-gray-700 dark:text-white sm:text-sm p-2 border"
+                        >
+                            {runs.map((run) => (
+                                <option key={run} value={run}>
+                                    {run}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
 
                 <div className="flex space-x-2 bg-gray-100 dark:bg-gray-700 p-1 rounded-lg">
                     <button
                         onClick={() => setActiveTab('training')}
                         className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === 'training'
-                                ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow'
-                                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                            ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
                             }`}
                     >
                         Training Metrics
@@ -73,8 +113,8 @@ export default function StatsViewer({ runs }: StatsViewerProps) {
                     <button
                         onClick={() => setActiveTab('system')}
                         className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === 'system'
-                                ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow'
-                                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                            ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
                             }`}
                     >
                         System Metrics
