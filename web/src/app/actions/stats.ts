@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import Papa from 'papaparse';
 
-const STATS_DIR = '../neural-network-train/src/stats/';
+const STATS_DIR = '../neural-network-train/stats/';
 
 export interface TrainingMetric {
     timestamp: string;
