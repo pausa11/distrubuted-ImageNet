@@ -11,10 +11,11 @@ from PIL import Image
 # Add src to path to import imagenet_classes
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 try:
-    from imagenet_classes import IMAGENET_SYNSETS
+    from imagenet_classes import IMAGENET_SYNSETS, IMAGENET_CLASS_NAMES
 except ImportError:
     # Fallback if not found, though it should be there
     IMAGENET_SYNSETS = []
+    IMAGENET_CLASS_NAMES = {}
 
 def build_model(num_classes: int = 1000) -> nn.Module:
     model = resnet50(weights=None)
@@ -76,10 +77,12 @@ def predict(image_path, checkpoint_path, device='cpu'):
         confidence = top_prob[0].item()
         
         synset = IMAGENET_SYNSETS[class_idx] if class_idx < len(IMAGENET_SYNSETS) else "Unknown"
+        class_name = IMAGENET_CLASS_NAMES.get(synset, "Unknown")
 
         return {
             "class_index": class_idx,
             "synset": synset,
+            "class_name": class_name,
             "confidence": confidence
         }
 

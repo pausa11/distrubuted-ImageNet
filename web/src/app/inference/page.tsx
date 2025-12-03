@@ -31,7 +31,7 @@ export default function InferencePage() {
             setPrediction(result);
         } catch (error) {
             console.error(error);
-            setPrediction({ class_index: -1, synset: '', confidence: 0, error: 'Failed to predict' });
+            setPrediction({ class_index: -1, synset: '', class_name: '', confidence: 0, error: 'Failed to predict' });
         } finally {
             setLoading(false);
         }
@@ -79,8 +79,8 @@ export default function InferencePage() {
                             onClick={handlePredict}
                             disabled={!file || loading}
                             className={`mt-6 w-full py-3 px-4 rounded-lg font-medium transition-colors ${!file || loading
-                                    ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                : 'bg-blue-600 hover:bg-blue-700 text-white'
                                 }`}
                         >
                             {loading ? 'Processing...' : 'Run Prediction'}
@@ -101,9 +101,14 @@ export default function InferencePage() {
                                     <>
                                         <div className="text-center p-6 bg-gray-900/50 rounded-lg border border-gray-700">
                                             <p className="text-sm text-gray-400 mb-1">Predicted Class</p>
-                                            <p className="text-3xl font-bold text-white mb-2">{prediction.synset}</p>
-                                            <div className="inline-block px-3 py-1 bg-blue-900/50 text-blue-300 rounded-full text-sm border border-blue-800">
-                                                Index: {prediction.class_index}
+                                            <p className="text-3xl font-bold text-white mb-2">{prediction.class_name || prediction.synset}</p>
+                                            <div className="flex items-center justify-center gap-2 text-sm text-gray-400">
+                                                <span className="inline-block px-3 py-1 bg-gray-800 text-gray-300 rounded-full border border-gray-700">
+                                                    {prediction.synset}
+                                                </span>
+                                                <span className="inline-block px-3 py-1 bg-blue-900/50 text-blue-300 rounded-full border border-blue-800">
+                                                    Index: {prediction.class_index}
+                                                </span>
                                             </div>
                                         </div>
 

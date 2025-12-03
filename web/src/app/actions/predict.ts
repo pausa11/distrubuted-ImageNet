@@ -15,6 +15,7 @@ const CHECKPOINT_PATH = '../neural-network-train/checkpoints/best_checkpoint.pt'
 export interface PredictionResult {
     class_index: number;
     synset: string;
+    class_name: string;
     confidence: number;
     error?: string;
 }
@@ -22,7 +23,7 @@ export interface PredictionResult {
 export async function predictImage(formData: FormData): Promise<PredictionResult> {
     const file = formData.get('image') as File;
     if (!file) {
-        return { class_index: -1, synset: '', confidence: 0, error: 'No image provided' };
+        return { class_index: -1, synset: '', class_name: '', confidence: 0, error: 'No image provided' };
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -31,9 +32,20 @@ export async function predictImage(formData: FormData): Promise<PredictionResult
     try {
         await writeFile(tempFilePath, buffer);
 
-        const command = `../.venv/bin/python ${PREDICT_SCRIPT} --image_path "${tempFilePath}" --checkpoint_path "${CHECKPOINT_PATH}"`;
+        const projectRoot = process.cwd();
+        const pythonPath = join(projectRoot, '../.venv/bin/python');
+        const scriptPath = join(projectRoot, '../neural-network-train/scripts/predict.py');
+        const checkpointPath = join(projectRoot, '../neural-network-train/checkpoints/best_checkpoint.pt');
+
+        const command = `${pythonPath} ${scriptPath} --image_path "${tempFilePath}" --checkpoint_path "${checkpointPath}"`;
+
+        console.log('CWD:', process.cwd());
+        console.log('Executing command:', command);
 
         const { stdout, stderr } = await execAsync(command);
+
+        console.log('stdout:', stdout);
+        console.log('stderr:', stderr);
 
         if (stderr) {
             // Some warnings might be printed to stderr, so we don't treat all stderr as fatal,
@@ -46,12 +58,12 @@ export async function predictImage(formData: FormData): Promise<PredictionResult
             return result;
         } catch (parseError) {
             console.error('Failed to parse inference output:', stdout);
-            return { class_index: -1, synset: '', confidence: 0, error: 'Failed to parse inference result' };
+            return { class_index: -1, synset: '', class_name: '', confidence: 0, error: 'Failed to parse inference result' };
         }
 
     } catch (error) {
         console.error('Inference error:', error);
-        return { class_index: -1, synset: '', confidence: 0, error: 'Internal server error during inference' };
+        return { class_index: -1, synset: '', class_name: '', confidence: 0, error: `Internal server error: ${error instanceof Error ? error.message : String(error)}` };
     } finally {
         // Cleanup
         try {
