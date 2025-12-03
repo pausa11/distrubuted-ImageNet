@@ -10,9 +10,7 @@ env/
 data/
 checkpoints/
 logs/
-system_metrics.csv
-stats/
-*.csv
+stats_tiny/
 
 # Tiny-ImageNet local (si prefieres granular)
 .tiny-imagenet-200/
