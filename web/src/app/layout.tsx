@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   description: "Documentación, paper y blog para el Entrenamiento Distribuido Asíncrono de ImageNet1k",
 };
 
+import Chatbot from "@/components/Chatbot";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -22,6 +24,7 @@ export default function RootLayout({
         <main className="flex-grow">
           {children}
         </main>
+        <Chatbot />
       </body>
     </html>
   );
