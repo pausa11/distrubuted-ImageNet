@@ -9,6 +9,7 @@ env/
 # Datos y artefactos pesados
 data/
 checkpoints/
+checkpoints_tiny/
 logs/
 stats_tiny/
 
